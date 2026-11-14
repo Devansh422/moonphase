@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Moon Pond</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #07090d; overflow: hidden; }
+  canvas { display: block; opacity: 0; transition: opacity 1.2s ease; }
+  canvas.ready { opacity: 1; }
+  #loading { position: fixed; inset: 0; display: grid; place-items: center; color: #8a93a5;
+             font: 13px/1.4 system-ui, sans-serif; letter-spacing: .2em; pointer-events: none; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="loading">LOADING</div>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { Reflector } from 'three/addons/objects/Reflector.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+// ---------- Quality tier: ?q=low|high overrides auto-detect ----------
+const qParam = new URLSearchParams(location.search).get('q');
+const mobile = matchMedia('(pointer: coarse)').matches || Math.min(innerWidth, innerHeight) < 700;
+const HIGH = qParam ? qParam === 'high' : !mobile;
+const Q = HIGH
+  ? { blades: 380000, segs: 3, maxPR: 1.75, msaa: 4, reflScale: 0.5 }
+  : { blades: 130000, segs: 2, maxPR: 1.25, msaa: 0, reflScale: 0.35 };
+
+const HORIZON = new THREE.Color(0x8f98aa), ZENITH = new THREE.Color(0x06080c);
+const FOG = { near: 12, far: 70 };
+const GRASS_LAYER = 1; // grass is skipped by the pond reflection (big perf win, edge is hidden by ripples)
+
+// ---------- Renderer / scene / camera ----------
+const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
+let pixelRatio = Math.min(devicePixelRatio, Q.maxPR);
+renderer.setPixelRatio(pixelRatio);
+renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.AgXToneMapping;
+renderer.toneMappingExposure = 1.15;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(HORIZON, FOG.near, FOG.far);
+
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.05, 400);
+camera.position.set(0, 2, 10.5);
+camera.layers.enable(GRASS_LAYER);
+function fitFov() { // Blender: 28mm lens on 36mm sensor
+  const aspect = innerWidth / innerHeight;
+  camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(Math.atan(18 / 28)) / Math.max(aspect, 4 / 3)));
+  camera.aspect = aspect; camera.updateProjectionMatrix();
+}
+fitFov();
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 2.2, -4);
+controls.enableDamping = true; controls.dampingFactor = 0.06;
+controls.minDistance = 3; controls.maxDistance = 22; controls.enablePan = false;
+controls.maxPolarAngle = THREE.MathUtils.degToRad(91);
+controls.update();
+
+// ---------- Shared GLSL noise ----------
+const NOISE = /* glsl */`
+float hash13(vec3 p){ p = fract(p*0.1031); p += dot(p, p.zyx + 31.32); return fract((p.x + p.y) * p.z); }
+vec3 hash33(vec3 p){ p = fract(p*vec3(.1031,.1030,.0973)); p += dot(p, p.yxz + 33.33); return fract((p.xxy + p.yxx) * p.zyx); }
+float vnoise(vec3 p){
+  vec3 i = floor(p), f = fract(p); f = f*f*(3.0 - 2.0*f);
+  return mix(mix(mix(hash13(i), hash13(i+vec3(1,0,0)), f.x), mix(hash13(i+vec3(0,1,0)), hash13(i+vec3(1,1,0)), f.x), f.y),
+             mix(mix(hash13(i+vec3(0,0,1)), hash13(i+vec3(1,0,1)), f.x), mix(hash13(i+vec3(0,1,1)), hash13(i+vec3(1,1,1)), f.x), f.y), f.z);
+}
+float fbm(vec3 p){ float s = 0.0, a = 0.5; for (int i = 0; i < 5; i++){ s += a*vnoise(p); p = p*2.03 + 1.7; a *= 0.5; } return s; }
+// Bump from a scalar height using screen derivatives (one height eval per pixel, no tangents needed)
+vec3 bumpNormal(vec3 n, vec3 viewPos, float h, float scale){
+  vec3 dpdx = dFdx(-viewPos), dpdy = dFdy(-viewPos);
+  float dhx = dFdx(h) * scale, dhy = dFdy(h) * scale;
+  vec3 r1 = cross(dpdy, n), r2 = cross(n, dpdx);
+  float det = dot(dpdx, r1);
+  vec3 grad = sign(det) * (dhx * r1 + dhy * r2);
+  return normalize(abs(det) * n - grad);
+}`;
+
+// ---------- Sky dome ----------
+scene.add(new THREE.Mesh(
+  new THREE.SphereGeometry(300, 32, 16),
+  new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthWrite: false, fog: false,
+    uniforms: { horizon: { value: HORIZON }, zenith: { value: ZENITH } },
+    vertexShader: `varying vec3 vDir; void main(){ vDir = normalize(position);
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); gl_Position.z = gl_Position.w; }`,
+    fragmentShader: `uniform vec3 horizon, zenith; varying vec3 vDir;
+      void main(){
+        float t = smoothstep(-0.03, 0.55, vDir.y);
+        vec3 c = mix(horizon * 1.15, zenith, pow(t, 0.7));
+        c += horizon * 0.25 * exp(-abs(vDir.y) * 22.0);   // thin bright haze band on the horizon
+        gl_FragColor = vec4(c, 1.0);
+        #include <colorspace_fragment>
+      }`
+  })
+));
+
+// ---------- Lights (matched to the Blender setup) ----------
+scene.add(new THREE.HemisphereLight(0x9aa6bd, 0x05060a, 0.22));
+const fill = new THREE.DirectionalLight(0xb4c0dc, 0.3); fill.position.set(0, 6, 14); scene.add(fill);
+const rim = new THREE.DirectionalLight(0xdde5ff, 0.9); rim.position.set(0, 4, -30); scene.add(rim);
+// Moon key from below: bright lower crescent; upward-facing ground can't receive it
+const under = new THREE.DirectionalLight(0xf3f6ff, 7.5);
+under.position.set(-3, -14, -14); under.target.position.set(0, 5.8, -14);
+scene.add(under, under.target);
+
+const clock = new THREE.Clock();
+const uTime = { value: 0 };
+
+// ---------- Material upgrades (injected into the glTF PBR materials) ----------
+function moonMaterial(m) {
+  m.map = null; m.normalMap = null;            // replaced by procedural craters below
+  m.color.setScalar(1); m.roughness = 1; m.metalness = 0;
+  m.emissive = new THREE.Color(0x07080b);       // faint earthshine on the dark side
+  m.onBeforeCompile = (s) => {
+    s.vertexShader = 'varying vec3 vObj;\n' + s.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\nvObj = position;');
+    s.fragmentShader = 'varying vec3 vObj;\n' + NOISE + /* glsl */`
+      // sum of crater profiles: bowl inside, raised rim, soft ejecta outside
+      float craters(vec3 p, float density){
+        vec3 i = floor(p), f = fract(p); float h = 0.0;
+        for (int x=-1;x<=1;x++) for (int y=-1;y<=1;y++) for (int z=-1;z<=1;z++){
+          vec3 g = vec3(x,y,z); vec3 o = hash33(i + g);
+          if (hash13(i + g + 17.0) > density) continue;
+          float r = mix(0.12, 0.48, o.z*o.z);
+          float d = length(g + o - f) / r;
+          float bowl = d < 1.0 ? (d*d - 1.0) * 0.55 : 0.0;
+          float rimH = 0.32 * exp(-(d-1.0)*(d-1.0)*16.0);
+          h += (bowl + rimH) * r;
+        }
+        return h;
+      }
+      float moonHeight(vec3 p){
+        return craters(p*1.0, 0.55)*1.0 + craters(p*2.6+3.1, 0.7)/2.6 + craters(p*7.0+9.3, 0.8)/7.0
+             + craters(p*16.0+1.3, 0.9)/16.0 + (fbm(p*24.0)-0.5)*0.012;
+      }
+    ` + s.fragmentShader
+      .replace('#include <color_fragment>', /* glsl */`#include <color_fragment>
+        float mH = moonHeight(vObj);
+        float maria = smoothstep(0.42, 0.62, fbm(vObj*0.55 + 4.0));                 // dark basalt seas
+        float tone = mix(0.62, 0.30, maria) * (0.85 + 0.3*fbm(vObj*6.0)) + clamp(mH, -0.1, 0.1)*0.6;
+        diffuseColor.rgb = vec3(tone) * vec3(0.98, 0.99, 1.02);`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        normal = bumpNormal(normal, vViewPosition, mH, 1.6);`);
+  };
+}
+
+function rockMaterial(m) {
+  m.color.setRGB(0.018, 0.018, 0.02); m.metalness = 0; m.roughness = 0.6;
+  m.normalScale.setScalar(1.3);
+  m.onBeforeCompile = (s) => {
+    s.vertexShader = 'varying vec3 vW;\n' + s.vertexShader.replace('#include <begin_vertex>',
+      '#include <begin_vertex>\nvW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    s.fragmentShader = 'varying vec3 vW;\n' + NOISE + s.fragmentShader
+      .replace('#include <roughnessmap_fragment>', /* glsl */`#include <roughnessmap_fragment>
+        float rn = fbm(vW*7.0);
+        roughnessFactor = mix(0.22, 0.85, smoothstep(0.35, 0.65, rn));   // wet glints vs. dry stone
+        float sparkle = step(0.985, hash13(floor(vW*140.0)));            // mica flecks
+        roughnessFactor = mix(roughnessFactor, 0.08, sparkle);`)
+      .replace('#include <normal_fragment_maps>', /* glsl */`#include <normal_fragment_maps>
+        float rh = fbm(vW*vec3(2.5, 0.9, 2.5))*0.12 + fbm(vW*11.0)*0.025 + abs(fbm(vW*30.0)-0.5)*0.008;
+        normal = bumpNormal(normal, vViewPosition, rh, 1.0);`);
+  };
+}
+
+function groundMaterial(m) {
+  m.color.setRGB(0.012, 0.014, 0.018); m.roughness = 1; m.metalness = 0;
+}
+
+// ---------- Pond: planar reflection with animated ripples + fresnel ----------
+const WaterShader = {
+  name: 'PondWater',
+  uniforms: { color: { value: null }, tDiffuse: { value: null }, textureMatrix: { value: null }, uTime },
+  vertexShader: /* glsl */`
+    uniform mat4 textureMatrix; varying vec4 vUv; varying vec3 vW;
+    void main(){ vUv = textureMatrix * vec4(position, 1.0); vW = (modelMatrix * vec4(position, 1.0)).xyz;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: NOISE + /* glsl */`
+    uniform vec3 color; uniform sampler2D tDiffuse; uniform float uTime; varying vec4 vUv; varying vec3 vW;
+    vec2 waves(vec2 p, float t){
+      vec2 g = vec2(0.0);
+      // analytic slopes of a few gerstner-ish directional waves
+      const vec4 W[5] = vec4[5](vec4(1.0,0.15,9.0,0.010), vec4(0.8,-0.6,13.0,0.006), vec4(-0.3,1.0,17.0,0.004),
+                                vec4(0.95,0.3,27.0,0.0025), vec4(-0.7,-0.7,35.0,0.0018));
+      for (int i = 0; i < 5; i++){ vec2 d = normalize(W[i].xy); float k = W[i].z;
+        g += d * k * W[i].w * cos(dot(p, d)*k + t*sqrt(k)*1.3); }
+      // slow irregular swell
+      float e = 0.05, n0 = vnoise(vec3(p*2.2, t*0.25));
+      g += vec2(vnoise(vec3((p+vec2(e,0))*2.2, t*0.25)) - n0, vnoise(vec3((p+vec2(0,e))*2.2, t*0.25)) - n0) / e * 0.02;
+      return g;
+    }
+    void main(){
+      vec2 g = waves(vW.xz, uTime);
+      vec3 N = normalize(vec3(-g.x, 1.0, -g.y));
+      vec3 V = normalize(cameraPosition - vW);
+      vec4 uv = vUv; uv.xy += N.xz * vec2(0.9, 0.5) * 0.06 * uv.w;   // horizontal streaking like the reference
+      vec3 refl = texture2DProj(tDiffuse, uv).rgb;
+      float fres = 0.02 + 0.98 * pow(1.0 - max(dot(V, N), 0.0), 5.0);
+      vec3 deep = vec3(0.002, 0.0025, 0.0035);
+      vec3 col = mix(deep, refl * color, clamp(0.62 + fres, 0.0, 1.0));
+      // subtle specular glints from the bright sky
+      col += vec3(0.6,0.65,0.75) * pow(max(dot(reflect(-V, N), normalize(vec3(0.0, 0.25, -1.0))), 0.0), 220.0) * 0.6;
+      gl_FragColor = vec4(col, 1.0);
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+    }`
+};
+
+// ---------- GPU grass ----------
+function bladeGeometry(segs) {
+  const pos = [], idx = [];
+  for (let s = 0; s < segs; s++) { const t = s / segs; pos.push(-0.5, t, 0, 0.5, t, 0); }
+  pos.push(0, 1, 0);
+  for (let s = 0; s < segs - 1; s++) { const a = s * 2; idx.push(a, a + 1, a + 2, a + 2, a + 1, a + 3); }
+  const a = (segs - 1) * 2; idx.push(a, a + 1, a + 2);
+  const g = new THREE.InstancedBufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx);
+  return g;
+}
+
+const grassMaterial = new THREE.ShaderMaterial({
+  side: THREE.DoubleSide,
+  uniforms: {
+    uTime, uRoot: { value: new THREE.Color(0.006, 0.007, 0.009) }, uTip: { value: new THREE.Color(0.11, 0.12, 0.135) },
+    uFogColor: { value: HORIZON }, uFogNear: { value: FOG.near }, uFogFar: { value: FOG.far },
+    uKeyDir: { value: new THREE.Vector3(0, 6, 14).normalize() }, uBackDir: { value: new THREE.Vector3(0, 0.22, -1).normalize() },
+  },
+  vertexShader: /* glsl */`
+    attribute vec4 aOffset;   // xyz root, w random
+    attribute vec4 aParams;   // yaw, height, width, lean
+    uniform float uTime;
+    varying float vT, vRand, vDist; varying vec3 vN, vW;
+    void main(){
+      float t = position.y;
+      float c = cos(aParams.x), s = sin(aParams.x);
+      vec3 side = vec3(c, 0.0, s), fwd = vec3(-s, 0.0, c);
+      vec2 wp = aOffset.xz * 0.45 + uTime * vec2(0.55, 0.2);
+      float wind = sin(wp.x + sin(wp.y*1.3)) * 0.5 + sin(wp.y*2.1 + aOffset.w*6.28) * 0.25;
+      float dist = distance(cameraPosition, aOffset.xyz);
+      float w = aParams.z * (1.0 + dist * 0.035);   // widen far blades: less shimmer/aliasing
+      vec3 bend = (fwd * aParams.w + vec3(0.9, 0.0, 0.35) * wind * 0.35) * t * t * aParams.y;
+      vec3 p = side * position.x * w * (1.0 - t * 0.6) + vec3(0.0, t * aParams.y, 0.0) + bend;
+      p.y -= length(bend) * 0.3 * t;               // keep length roughly constant as it bends
+      vW = aOffset.xyz + p;
+      vN = normalize(fwd + vec3(0.0, 0.8, 0.0) + side * position.x * 0.8);
+      vT = t; vRand = aOffset.w; vDist = dist;
+      gl_Position = projectionMatrix * viewMatrix * vec4(vW, 1.0);
+    }`,
+  fragmentShader: /* glsl */`
+    uniform vec3 uRoot, uTip, uFogColor, uKeyDir, uBackDir; uniform float uFogNear, uFogFar;
+    varying float vT, vRand, vDist; varying vec3 vN, vW;
+    void main(){
+      vec3 N = normalize(vN) * (gl_FrontFacing ? 1.0 : -1.0);
+      vec3 V = normalize(cameraPosition - vW);
+      vec3 base = mix(uRoot, uTip, pow(vT, 1.4)) * (0.7 + 0.6 * vRand);
+      float ao = mix(0.18, 1.0, smoothstep(0.0, 0.7, vT));
+      float sky = 0.5 + 0.5 * N.y;
+      float key = max(dot(N, uKeyDir), 0.0);
+      float back = pow(max(dot(-V, uBackDir), 0.0), 4.0) * vT * vT;      // silver sheen toward the horizon
+      vec3 col = base * ao * (0.55 * sky + 0.5 * key) + vec3(0.42, 0.46, 0.55) * back * 0.32;
+      col += pow(max(dot(N, normalize(uKeyDir + V)), 0.0), 48.0) * 0.035 * vT;
+      col = mix(col, uFogColor, smoothstep(uFogNear, uFogFar, vDist));
+      gl_FragColor = vec4(col, 1.0);
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+    }`
+});
+
+function mulberry32(a) { return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a);
+  t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+
+function buildGrass(buf) {
+  // terrain.bin from Blender: [N, size, minH, maxH, originX, originY] f32, then N*N u16 heights, then N*N u8 grass mask
+  const [N, size, hMin, hMax, ox, oy] = new Float32Array(buf, 0, 6);
+  const hs = new Uint16Array(buf, 24, N * N), mk = new Uint8Array(buf, 24 + N * N * 2, N * N);
+  const sample = (arr, bx, by) => {
+    const fx = THREE.MathUtils.clamp(((bx - ox) / size + 0.5) * (N - 1), 0, N - 1.001);
+    const fy = THREE.MathUtils.clamp(((by - oy) / size + 0.5) * (N - 1), 0, N - 1.001);
+    const i = fx | 0, j = fy | 0, u = fx - i, v = fy - j, k = j * N + i;
+    return (arr[k] * (1 - u) + arr[k + 1] * u) * (1 - v) + (arr[k + N] * (1 - u) + arr[k + N + 1] * u) * v;
+  };
+  const height = (bx, by) => hMin + sample(hs, bx, by) / 65535 * (hMax - hMin);
+
+  const X0 = -18, X1 = 18, Y0 = -15, Y1 = 18, CH = 6;            // Blender XY area, chunk size (m)
+  const cx = Math.ceil((X1 - X0) / CH), cy = Math.ceil((Y1 - Y0) / CH);
+  const chunks = Array.from({ length: cx * cy }, () => ({ off: [], par: [] }));
+  const rnd = mulberry32(1337);
+  const geo = bladeGeometry(Q.segs);
+  for (let n = 0; n < Q.blades * 1.4; n++) {
+    const bx = X0 + rnd() * (X1 - X0), by = Y0 + rnd() * (Y1 - Y0);
+    const m = sample(mk, bx, by) / 255;
+    if (rnd() > m) continue;                                       // pond and shore stay clear
+    const h = height(bx, by);
+    const patch = 0.5 + 0.5 * Math.sin(bx * 0.9 + Math.sin(by * 0.7) * 2) * Math.cos(by * 0.6);
+    const c = chunks[Math.floor((by - Y0) / CH) * cx + Math.floor((bx - X0) / CH)];
+    c.off.push(bx, h - 0.03, -by, rnd());                           // Blender (x,y,z) -> three (x,z,-y)
+    c.par.push(rnd() * Math.PI * 2, (0.07 + 0.13 * rnd() * rnd() + 0.06 * patch) * (0.4 + 0.6 * m),
+               0.022 + 0.014 * rnd(), 0.15 + 0.35 * rnd());
+  }
+  const group = new THREE.Group();
+  for (const c of chunks) {
+    if (!c.off.length) continue;
+    const g = geo.clone();
+    g.setAttribute('aOffset', new THREE.InstancedBufferAttribute(new Float32Array(c.off), 4));
+    g.setAttribute('aParams', new THREE.InstancedBufferAttribute(new Float32Array(c.par), 4));
+    g.instanceCount = c.off.length / 4;
+    const box = new THREE.Box3();
+    for (let i = 0; i < c.off.length; i += 4) box.expandByPoint(new THREE.Vector3(c.off[i], c.off[i + 1], c.off[i + 2]));
+    box.max.y += 0.4; g.boundingSphere = box.getBoundingSphere(new THREE.Sphere()); g.boundingBox = box;
+    const mesh = new THREE.Mesh(g, grassMaterial);                 // per-chunk frustum culling
+    mesh.layers.set(GRASS_LAYER);
+    group.add(mesh);
+  }
+  return group;
+}
+
+// ---------- Post: MSAA HDR -> bloom -> tonemap -> film grade ----------
+const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: Q.msaa });
+const composer = new EffectComposer(renderer, rt);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.35, 0.7, 0.9);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+const grade = new ShaderPass({
+  uniforms: { tDiffuse: { value: null }, uTime, uRes: { value: new THREE.Vector2() } },
+  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+  fragmentShader: /* glsl */`
+    uniform sampler2D tDiffuse; uniform float uTime; uniform vec2 uRes; varying vec2 vUv;
+    float h12(vec2 p){ vec3 q = fract(vec3(p.xyx) * .1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
+    void main(){
+      vec3 c = texture2D(tDiffuse, vUv).rgb;
+      float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+      c = mix(vec3(l), c, 0.3) * vec3(0.95, 0.985, 1.05);                    // near-monochrome, cool
+      c = mix(c, c*c*(3.0 - 2.0*c), 0.35);                                   // gentle S-curve
+      float vig = smoothstep(0.95, 0.25, length((vUv - 0.5) * vec2(uRes.x/uRes.y, 1.0)) * 0.9);
+      c *= mix(0.5, 1.0, vig);
+      float g = h12(vUv * uRes + fract(uTime * 7.31) * 517.0) - 0.5;
+      c += g * mix(0.06, 0.03, l);                                           // film grain, stronger in shadows
+      gl_FragColor = vec4(c, 1.0);
+    }`
+});
+grade.uniforms.uTime = uTime;             // ShaderPass clones uniforms too
+composer.addPass(grade);
+
+function resize() {
+  renderer.setPixelRatio(pixelRatio); renderer.setSize(innerWidth, innerHeight);
+  composer.setPixelRatio(pixelRatio); composer.setSize(innerWidth, innerHeight);
+  grade.uniforms.uRes.value.set(innerWidth * pixelRatio, innerHeight * pixelRatio);
+  fitFov();
+}
+addEventListener('resize', resize);
+resize();
+
+// ---------- Load ----------
+const draco = new DRACOLoader().setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/libs/draco/gltf/');
+const [gltf, terrainBuf] = await Promise.all([
+  new GLTFLoader().setDRACOLoader(draco).loadAsync('moon_pond_web.glb'),
+  fetch('terrain.bin').then(r => { if (!r.ok) throw new Error('terrain.bin ' + r.status); return r.arrayBuffer(); }),
+]).catch((e) => {
+  document.getElementById('loading').textContent = 'LOAD FAILED: serve this folder over http (not file://)';
+  throw e;
+});
+
+console.log('STAGE loaded'); const root = gltf.scene;
+root.traverse((o) => {
+  if (!o.isMesh) return;
+  if (o.name.startsWith('Moon')) moonMaterial(o.material);
+  else if (o.name.startsWith('Monolith')) rockMaterial(o.material);
+  else if (o.name.startsWith('Terrain')) groundMaterial(o.material);
+});
+scene.add(root);
+
+const water = root.getObjectByName('Pond_Water_web');
+water.updateWorldMatrix(true, false);
+const wsize = new THREE.Box3().setFromObject(water).getSize(new THREE.Vector3());
+const mirror = new Reflector(new THREE.PlaneGeometry(wsize.x, wsize.z), {
+  shader: WaterShader, color: 0xb8bcc6, clipBias: 0.002,
+  textureWidth: Math.round(innerWidth * pixelRatio * Q.reflScale),
+  textureHeight: Math.round(innerHeight * pixelRatio * Q.reflScale),
+});
+mirror.material.uniforms.uTime = uTime;   // Reflector clones uniforms; re-share the clock
+mirror.rotation.x = -Math.PI / 2;
+mirror.position.setFromMatrixPosition(water.matrixWorld);
+water.visible = false;
+scene.add(mirror);
+
+scene.add(buildGrass(terrainBuf)); console.log('STAGE grass');
+
+await renderer.compileAsync(scene, camera);
+console.log('STAGE compiled'); document.getElementById('loading').remove();
+renderer.domElement.classList.add('ready');
+
+// ---------- Loop with adaptive resolution ----------
+let frames = 0, acc = 0;
+renderer.setAnimationLoop(() => {
+  const dt = clock.getDelta();
+  uTime.value += dt;
+  controls.update();
+  composer.render(dt);
+  // every ~90 frames: drop resolution if we're under ~45fps, raise it back if there's headroom
+  acc += dt; if (++frames === 90) {
+    const avg = acc / frames; frames = 0; acc = 0;
+    const cap = Math.min(devicePixelRatio, Q.maxPR);
+    if (avg > 1 / 45 && pixelRatio > 0.6) { pixelRatio = Math.max(0.6, pixelRatio - 0.2); resize(); }
+    else if (avg < 1 / 58 && pixelRatio < cap) { pixelRatio = Math.min(cap, pixelRatio + 0.1); resize(); }
+  }
+});
+</script>
+</body>
+</html>

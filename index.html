@@ -1,0 +1,978 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>House of CZARD</title>
+<!-- start every download at once instead of discovering them module by module -->
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link rel="preconnect" href="https://portal.czard.com" crossorigin>
+<link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js">
+<link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/loaders/GLTFLoader.js">
+<link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/loaders/DRACOLoader.js">
+<link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/objects/Reflector.js">
+<link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/postprocessing/EffectComposer.js">
+<link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/postprocessing/UnrealBloomPass.js">
+<link rel="preload" href="moon_pond_web.glb" as="fetch" crossorigin>
+<link rel="preload" href="stones.glb" as="fetch" crossorigin>
+<link rel="preload" href="flower.glb" as="fetch" crossorigin>
+<link rel="preload" href="terrain.bin" as="fetch" crossorigin>
+<link rel="preload" href="https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/libs/draco/gltf/draco_decoder.wasm" as="fetch" crossorigin>
+<link rel="preload" href="home-page/assets/cormorant-garamond-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="home-page/assets/jost-latin.woff2" as="font" type="font/woff2" crossorigin>
+<style>
+  @font-face { font-family: 'Cormorant Garamond'; font-weight: 300 700; font-display: swap; src: url(home-page/assets/cormorant-garamond-latin.woff2) format('woff2'); }
+  @font-face { font-family: 'Jost'; font-weight: 300 500; font-display: swap; src: url(home-page/assets/jost-latin.woff2) format('woff2'); }
+  html, body { margin: 0; height: 100%; background: #07090d; overflow: hidden; color: #f4efe6; font-family: 'Jost', sans-serif; }
+  canvas { display: block; opacity: 0; transition: opacity 1.6s ease; touch-action: none; }
+  canvas.ready { opacity: 1; }
+  .entered canvas { cursor: grab; }
+  .entered canvas:active { cursor: grabbing; }
+  #loading { position: fixed; inset: 0; display: grid; place-items: center; color: #8a93a5;
+             font: 400 .7rem/1 'Jost', sans-serif; letter-spacing: .4em; pointer-events: none; }
+  .fade { transition: opacity 1.2s cubic-bezier(.16,1,.3,1), transform 1.2s cubic-bezier(.16,1,.3,1); }
+  .logo { position: fixed; left: 50%; top: 2.2rem; transform: translateX(-50%); width: clamp(30px, 2.4vw, 46px); z-index: 3; opacity: 0; }
+  .logo img { display: block; width: 100%; height: auto; filter: drop-shadow(0 0 22px rgba(255,244,226,.3)); }
+  .ready .logo { opacity: .92; }
+
+  /* intro: copy sits in the lower third so the moon stays clear */
+  .intro { position: fixed; left: 0; right: 0; bottom: 0; z-index: 2; padding: 0 16px 3.2rem; text-align: center;
+    background: linear-gradient(to top, rgba(4,5,8,.72), rgba(4,5,8,.35) 55%, transparent); opacity: 0; transform: translateY(14px); pointer-events: none; }
+  .ready .intro { opacity: 1; transform: none; pointer-events: auto; }
+  .entered .intro { opacity: 0; transform: translateY(-10px); pointer-events: none; }
+  .eyebrow { font: 400 clamp(.62rem, .9vw, .75rem)/1.4 'Jost', sans-serif; letter-spacing: .42em; text-transform: uppercase; margin: 0 0 1.1rem; opacity: .75; }
+  .intro h1 { font: 300 clamp(2.4rem, 6vw, 4.8rem)/1 'Cormorant Garamond', serif; letter-spacing: .12em; margin: 0 0 1rem; }
+  .sub { font: 400 clamp(1.05rem, 1.7vw, 1.4rem)/1.4 'Cormorant Garamond', serif; max-width: 32rem; margin: 0 auto 2rem; opacity: .82; }
+  .btn { display: inline-block; padding: .95rem 2.6rem; border: 1px solid rgba(244,239,230,.55); color: #f4efe6; background: rgba(8,10,14,.25);
+    font: 400 .68rem/1 'Jost', sans-serif; letter-spacing: .34em; text-transform: uppercase; text-decoration: none; cursor: pointer;
+    backdrop-filter: blur(8px); transition: background .4s, color .4s, border-color .4s; }
+  .btn:hover, .btn:focus-visible { background: #f4efe6; color: #12100c; border-color: #f4efe6; outline: none; }
+
+  /* experience */
+  .caption { position: fixed; left: 0; right: 0; bottom: 2.6rem; z-index: 2; text-align: center; text-shadow: 0 1px 14px rgba(0,0,0,.6);
+    opacity: 0; transform: translateY(12px); pointer-events: none; }
+  .show-caption .caption { opacity: 1; transform: none; transition-delay: .25s; }
+  .show-caption .caption .btn { pointer-events: auto; }
+  .idx { margin: 0 0 .7rem; font: 400 .62rem/1 'Jost', sans-serif; letter-spacing: .4em; opacity: .65; }
+  .caption h2 { margin: 0 0 1.3rem; font: 300 clamp(2rem, 4.4vw, 3.4rem)/1 'Cormorant Garamond', serif; letter-spacing: .14em; }
+  .reveal { position: fixed; left: 50%; bottom: 2.8rem; z-index: 2; transform: translateX(-50%); background: none; border: 0; color: #f4efe6; cursor: pointer;
+    font: 400 .62rem/1 'Jost', sans-serif; letter-spacing: .4em; text-transform: uppercase; opacity: 0; pointer-events: none;
+    display: flex; flex-direction: column; align-items: center; gap: 1rem; padding: 8px 16px; }
+  .reveal::after { content: ''; width: 1px; height: 44px; background: linear-gradient(#f4efe6, transparent); animation: drip 2.4s ease-in-out infinite; transform-origin: top; }
+  @keyframes drip { 0% { transform: scaleY(0); opacity: 1; } 60% { transform: scaleY(1); opacity: 1; } 100% { transform: scaleY(1); opacity: 0; } }
+  .await-scroll .reveal { opacity: .85; pointer-events: auto; }
+  .nav { position: fixed; right: clamp(16px, 2.4vw, 40px); top: 50%; transform: translateY(-50%); z-index: 2; display: flex; flex-direction: column; gap: .9rem; opacity: 0; pointer-events: none; }
+  .show-nav .nav { opacity: 1; pointer-events: auto; }
+  .nav button { width: 18px; height: 18px; padding: 0; border: 0; background: none; cursor: pointer; display: grid; place-items: center; }
+  .nav button::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: rgba(244,239,230,.35); transition: background .4s, transform .4s; }
+  .nav button[aria-current="true"]::before { background: #f4efe6; transform: scale(1.5); }
+  .nav button:focus-visible { outline: 1px solid rgba(244,239,230,.6); }
+  @media (max-width: 760px) { .nav { right: 10px; } .caption { bottom: 2rem; } }
+  @media (prefers-reduced-motion: reduce) { .fade { transition-duration: .01s; } .reveal::after { animation: none; } }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="loading">LOADING</div>
+<div class="logo fade"><img src="home-page/assets/logo-white.png" alt="House of CZARD" width="81" height="120"></div>
+<section class="intro fade" id="intro">
+  <p class="eyebrow">Forget you are in India</p>
+  <h1>House of CZARD</h1>
+  <p class="sub">Step into an immersive world of Swiss craft, Geneva heritage, and watches shaped by precision.</p>
+  <button class="btn" id="enter" type="button">Enter Experience</button>
+</section>
+<button class="reveal fade" id="reveal" type="button">Scroll to reveal</button>
+<div class="caption fade" aria-live="polite">
+  <p class="idx" id="idx"></p>
+  <h2 id="title"></h2>
+  <a class="btn" id="discover" href="#">Discover</a>
+</div>
+<nav class="nav fade" id="nav" aria-label="Watches"></nav>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+import { Reflector } from 'three/addons/objects/Reflector.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+
+// ---------- Quality tier: ?q=low|mid|high overrides auto-detect ----------
+// Tiers only change how much work is done (counts, buffer sizes), never what the scene looks like; the adaptive loop
+// at the bottom then trims resolution and far grass further if a device still can't hold ~45 fps.
+const qParam = new URLSearchParams(location.search).get('q');
+const mobile = matchMedia('(pointer: coarse)').matches || Math.min(innerWidth, innerHeight) < 700;
+const cores = navigator.hardwareConcurrency || 4, mem = navigator.deviceMemory || (mobile ? 4 : 8);
+const TIER = ['low', 'mid', 'high'].includes(qParam) ? qParam
+  : mobile ? (cores <= 4 || mem <= 3 ? 'low' : 'mid') : (cores >= 6 && mem >= 8 ? 'high' : 'mid');
+const Q = {
+  high: { blades: 380000, segs: 3, maxPR: 1.75, msaa: 4, reflScale: 0.5, moon: 768, flowerCell: 1.25, motes: 4, spray: 1100 },
+  mid:  { blades: 180000, segs: 2, maxPR: 1.5,  msaa: 0, reflScale: 0.4, moon: 512, flowerCell: 1.45, motes: 3, spray: 650 },
+  low:  { blades: 100000, segs: 2, maxPR: 1.0,  msaa: 0, reflScale: 0.3, moon: 512, flowerCell: 1.7,  motes: 2, spray: 400 },
+}[TIER];
+
+const HORIZON = new THREE.Color(0x8f98aa), ZENITH = new THREE.Color(0x06080c);
+const FOG = { near: 12, far: 70 };
+const GRASS_LAYER = 1; // grass is skipped by the pond reflection (big perf win, edge is hidden by ripples)
+
+// ---------- Renderer / scene / camera ----------
+const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
+let pixelRatio = Math.min(devicePixelRatio, Q.maxPR);
+renderer.setPixelRatio(pixelRatio);
+renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.AgXToneMapping;
+renderer.toneMappingExposure = 1.15;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(HORIZON, FOG.near, FOG.far);
+
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.05, 400);
+camera.position.set(0, 2, 10.5);
+camera.layers.enable(GRASS_LAYER);
+function fitFov() { // Blender: 28mm lens on 36mm sensor
+  const aspect = innerWidth / innerHeight;
+  camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(Math.atan(18 / 28)) / Math.max(aspect, 4 / 3)));
+  camera.aspect = aspect; camera.updateProjectionMatrix();
+}
+fitFov();
+
+// Choreographed camera (no orbit): intro framing -> pulled back for the watches, plus a faint pointer parallax
+const CAM = {
+  intro: { pos: new THREE.Vector3(0, 2, 10.5), tgt: new THREE.Vector3(0, 2.2, -4) },
+  exp:   { pos: new THREE.Vector3(0, 2.25, 12.8), tgt: new THREE.Vector3(0, 1.05, 0) },
+};
+const camTgt = new THREE.Vector3(), pointer = new THREE.Vector2(), pointerS = new THREE.Vector2();
+addEventListener('pointermove', (e) => pointer.set(e.clientX / innerWidth * 2 - 1, e.clientY / innerHeight * 2 - 1));
+const easeIO = (x) => x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+const clamp01 = (x) => Math.min(Math.max(x, 0), 1);
+
+// ---------- Shared GLSL noise ----------
+const NOISE = /* glsl */`
+float hash13(vec3 p){ p = fract(p*0.1031); p += dot(p, p.zyx + 31.32); return fract((p.x + p.y) * p.z); }
+vec3 hash33(vec3 p){ p = fract(p*vec3(.1031,.1030,.0973)); p += dot(p, p.yxz + 33.33); return fract((p.xxy + p.yxx) * p.zyx); }
+float vnoise(vec3 p){
+  vec3 i = floor(p), f = fract(p); f = f*f*(3.0 - 2.0*f);
+  return mix(mix(mix(hash13(i), hash13(i+vec3(1,0,0)), f.x), mix(hash13(i+vec3(0,1,0)), hash13(i+vec3(1,1,0)), f.x), f.y),
+             mix(mix(hash13(i+vec3(0,0,1)), hash13(i+vec3(1,0,1)), f.x), mix(hash13(i+vec3(0,1,1)), hash13(i+vec3(1,1,1)), f.x), f.y), f.z);
+}
+float fbm(vec3 p){ float s = 0.0, a = 0.5; for (int i = 0; i < 5; i++){ s += a*vnoise(p); p = p*2.03 + 1.7; a *= 0.5; } return s; }
+// fbm that skips octaves finer than a pixel (px = screen footprint of p): those only shimmer. Skipped octaves add their
+// mean (0.5) so overall brightness doesn't change; the cut-off fades so there's no pop.
+float fbmL(vec3 p, float px){
+  float s = 0.0, a = 0.5;
+  for (int i = 0; i < 5; i++){
+    float k = 1.0 - smoothstep(0.35, 0.7, px);
+    s += a * (k > 0.0 ? mix(0.5, vnoise(p), k) : 0.5);
+    p = p*2.03 + 1.7; a *= 0.5; px *= 2.03;
+  }
+  return s;
+}
+`;
+const BUMP = /* glsl */`   // fragment-only (screen derivatives)
+// Bump from a scalar height using screen derivatives (one height eval per pixel, no tangents needed)
+vec3 bumpNormal(vec3 n, vec3 viewPos, float h, float scale){
+  vec3 dpdx = dFdx(-viewPos), dpdy = dFdy(-viewPos);
+  float dhx = dFdx(h) * scale, dhy = dFdy(h) * scale;
+  vec3 r1 = cross(dpdy, n), r2 = cross(n, dpdx);
+  float det = dot(dpdx, r1);
+  vec3 grad = sign(det) * (dhx * r1 + dhy * r2);
+  vec3 r = abs(det) * n - grad;
+  float l2 = dot(r, r);
+  return l2 > 1e-30 ? r * inversesqrt(l2) : n;   // normalize(0) = NaN, which bloom smears into black blocks
+}
+`; // trailing newline: three's '#define STANDARD' must not land on the '}' line (broke the rock shader)
+
+// ---------- Sky dome ----------
+scene.add(new THREE.Mesh(
+  new THREE.SphereGeometry(300, 32, 16),
+  new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthWrite: false, fog: false,
+    uniforms: { horizon: { value: HORIZON }, zenith: { value: ZENITH } },
+    vertexShader: `varying vec3 vDir; void main(){ vDir = normalize(position);
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); gl_Position.z = gl_Position.w; }`,
+    fragmentShader: `uniform vec3 horizon, zenith; varying vec3 vDir;
+      void main(){
+        float t = smoothstep(-0.03, 0.55, vDir.y);
+        vec3 c = mix(horizon * 1.15, zenith, pow(t, 0.7));
+        c += horizon * 0.25 * exp(-abs(vDir.y) * 22.0);   // thin bright haze band on the horizon
+        gl_FragColor = vec4(c, 1.0);
+        #include <colorspace_fragment>
+      }`
+  })
+));
+
+// ---------- Lights (matched to the Blender setup) ----------
+scene.add(new THREE.HemisphereLight(0x9aa6bd, 0x05060a, 0.22));
+const fill = new THREE.DirectionalLight(0xb4c0dc, 0.3); fill.position.set(0, 6, 14); scene.add(fill);
+const rim = new THREE.DirectionalLight(0xdde5ff, 0.9); rim.position.set(0, 4, -30); scene.add(rim);
+// Moon key from below: bright lower crescent; upward-facing ground can't receive it
+const under = new THREE.DirectionalLight(0xf3f6ff, 7.5);
+under.position.set(-3, -14, -14); under.target.position.set(0, 5.8, -14);
+scene.add(under, under.target);
+
+const clock = new THREE.Clock();
+const uTime = { value: 0 };
+const pxPerM = { value: 1 };                    // point sprites are sized in metres: pixels per metre at 1 m
+
+// ---------- Material upgrades (injected into the glTF PBR materials) ----------
+// Moon surface: craters, seas and tone are a pure function of direction, so they are rendered ONCE into a cube map
+// (tone + the analytic crater slope) instead of every frame: identical look, a single texture fetch per pixel.
+const MOON_GLSL = /* glsl */`
+// sum of crater profiles: bowl inside, raised rim, soft ejecta outside
+float craters(vec3 p, float density){
+  vec3 i = floor(p), f = fract(p); float h = 0.0;
+  for (int x=-1;x<=1;x++) for (int y=-1;y<=1;y++) for (int z=-1;z<=1;z++){
+    vec3 g = vec3(x,y,z); vec3 o = hash33(i + g);
+    if (hash13(i + g + 17.0) > density) continue;
+    float r = mix(0.12, 0.48, o.z*o.z);
+    float d = length(g + o - f) / r;
+    float bowl = d < 1.0 ? (d*d - 1.0) * 0.55 : 0.0;
+    float rimH = 0.32 * exp(-(d-1.0)*(d-1.0)*16.0);
+    h += (bowl + rimH) * r;
+  }
+  return h;
+}
+float moonHeight(vec3 p){
+  return craters(p*1.0, 0.55)*1.0 + craters(p*2.6+3.1, 0.7)/2.6 + craters(p*7.0+9.3, 0.8)/7.0
+       + (fbm(p*11.0)-0.5)*0.02;
+}
+`;
+// the sphere's tangent frame, shared by the bake and the material so the stored slope lines up exactly
+const MOON_FRAME = /* glsl */`vec3 moonT(vec3 n){ return normalize(cross(abs(n.y) > 0.99 ? vec3(1,0,0) : vec3(0,1,0), n)); }
+`;
+function bakeMoon(radius, size) {
+  const target = new THREE.WebGLCubeRenderTarget(size, { type: THREE.HalfFloatType, generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter });
+  const bake = new THREE.Scene();
+  const box = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), new THREE.ShaderMaterial({
+    side: THREE.BackSide, uniforms: { uR: { value: radius } },
+    vertexShader: `varying vec3 vDir; void main(){ vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: NOISE + MOON_GLSL + MOON_FRAME + /* glsl */`
+      uniform float uR; varying vec3 vDir;
+      void main(){
+        vec3 nO = normalize(vDir), p = nO * uR, tO = moonT(nO);
+        float mH = moonHeight(p);
+        const float e = 0.004;                                    // forward differences along the sphere tangents
+        float gx = (moonHeight(p + tO*e) - mH) / e, gy = (moonHeight(p + cross(nO, tO)*e) - mH) / e;
+        float maria = smoothstep(0.42, 0.62, fbm(p*0.55 + 4.0));                     // dark basalt seas
+        float tone = mix(0.74, 0.40, maria) * (0.85 + 0.3*fbm(p*6.0)) + clamp(mH, -0.1, 0.1)*0.8;
+        gl_FragColor = vec4(1.1 * gx, 1.1 * gy, tone, 1.0);
+      }`,
+  }));
+  bake.add(box);
+  new THREE.CubeCamera(0.1, 10, target).update(renderer, bake);
+  box.geometry.dispose(); box.material.dispose();
+  return target.texture;
+}
+
+function moonMaterial(m, geometry) {
+  m.map = null; m.normalMap = null;            // replaced by the baked craters below
+  m.color.setScalar(1); m.roughness = 1; m.metalness = 0;
+  m.emissive = new THREE.Color(0x111318);       // earthshine so the upper face isn't muddy
+  geometry.computeBoundingSphere();
+  const moonMap = bakeMoon(geometry.boundingSphere.radius, Q.moon);
+  m.onBeforeCompile = (s) => {
+    s.uniforms.moonMap = { value: moonMap };
+    // view-space tangent frame of the sphere: the baked slope turns into a normal with no 2x2-pixel blocks
+    s.vertexShader = 'varying vec3 vObj, vNv, vTv, vBv;\n' + MOON_FRAME + s.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
+      vObj = position; vec3 nO = normalize(position), tO = moonT(nO);
+      vNv = normalize(normalMatrix * nO); vTv = normalize(normalMatrix * tO); vBv = normalize(normalMatrix * cross(nO, tO));`);
+    s.fragmentShader = 'varying vec3 vObj, vNv, vTv, vBv;\nuniform samplerCube moonMap;\n' + s.fragmentShader
+      .replace('#include <color_fragment>', /* glsl */`#include <color_fragment>
+        vec4 mb = textureCube(moonMap, vObj);                     // r,g: crater slope  b: tone
+        diffuseColor.rgb = vec3(mb.b) * vec3(0.98, 0.99, 1.02);`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        normal = normalize(vNv - (mb.r * vTv + mb.g * vBv));`);
+  };
+}
+
+function rockMaterial(m) {
+  m.color.setScalar(1); m.metalness = 0; m.roughness = 1;          // albedo/roughness come from the shader below
+  m.normalScale.setScalar(1.3);
+  m.onBeforeCompile = (s) => {
+    s.vertexShader = 'varying vec3 vW;\n' + s.vertexShader.replace('#include <begin_vertex>',
+      '#include <begin_vertex>\nvW = transformed;');   // object space: the pattern rides with the floating stone
+    s.fragmentShader = 'varying vec3 vW;\n' + NOISE + BUMP + s.fragmentShader
+      .replace('#include <color_fragment>', /* glsl */`#include <color_fragment>
+        vec3 rp = vW;
+        float fw = length(fwidth(vW));                                    // object-space metres per pixel
+        float streak = fbmL(rp*vec3(9.0, 0.6, 9.0), fw*9.0);              // vertical weathering streaks (stones hang)
+        float weather = fbmL(rp*1.3 + 7.0, fw*1.3);
+        float alb = mix(0.012, 0.034,smoothstep(0.3, 0.75, weather*0.6 + streak*0.5));
+        alb *= 0.8 + 0.4*fbmL(rp*18.0, fw*18.0);                         // grainy basalt
+        diffuseColor.rgb = vec3(alb) * vec3(0.95, 0.97, 1.03);`)
+      .replace('#include <roughnessmap_fragment>', /* glsl */`#include <roughnessmap_fragment>
+        float damp = smoothstep(0.62, 0.72, fbmL(vW*vec3(3.0, 0.8, 3.0) + 2.0, fw*3.0));   // a few damp seams only
+        roughnessFactor = mix(0.82, 0.35, damp) - 0.15*fbmL(vW*25.0, fw*25.0);
+        float sparkle = step(0.992, hash13(floor(vW*160.0)));            // sparse mica flecks
+        roughnessFactor = mix(roughnessFactor, 0.12, sparkle);`)
+      .replace('#include <normal_fragment_maps>', /* glsl */`#include <normal_fragment_maps>
+        float ridge = 1.0 - abs(fbmL(vW*vec3(3.5, 1.2, 3.5), fw*3.5)*2.0 - 1.0);   // chipped, conchoidal facets
+        float rh = fbmL(vW*vec3(2.5, 0.7, 2.5), fw*2.5)*0.10 + ridge*ridge*0.05
+                 + fbmL(vW*vec3(14.0, 4.0, 14.0), fw*14.0)*0.02 + abs(fbmL(vW*36.0, fw*36.0)-0.5)*0.006;
+        normal = bumpNormal(normal, vViewPosition, rh, 1.0);`);
+  };
+}
+
+function groundMaterial(m) {
+  m.color.setRGB(0.012, 0.014, 0.018); m.roughness = 1; m.metalness = 0;
+}
+
+// ---------- Pond: planar reflection with animated ripples + fresnel ----------
+const WaterShader = {
+  name: 'PondWater',
+  uniforms: { color: { value: null }, tDiffuse: { value: null }, textureMatrix: { value: null }, uTime,
+              uSplash: { value: new THREE.Vector4(0, 0, -100, 0) } },   // xz centre, start time, strength
+  vertexShader: /* glsl */`
+    uniform mat4 textureMatrix; varying vec4 vUv; varying vec3 vW;
+    void main(){ vUv = textureMatrix * vec4(position, 1.0); vW = (modelMatrix * vec4(position, 1.0)).xyz;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: NOISE + /* glsl */`
+    uniform vec3 color; uniform sampler2D tDiffuse; uniform float uTime; uniform vec4 uSplash; varying vec4 vUv; varying vec3 vW;
+    // a watch breaking the surface: rings rolling out from an elongated source (the watch is wide on x), slope only
+    vec2 splash(vec2 p){
+      float age = uTime - uSplash.z;
+      if (age < 0.0 || age > 10.0) return vec2(0.0);
+      vec2 d = (p - uSplash.xy) * vec2(0.6, 1.0);
+      float r = length(d) + 1e-3;
+      vec2 g = vec2(0.0);
+      for (int i = 0; i < 3; i++){                              // three wave trains: the break, the strap, the settle
+        float a = age - float(i) * 0.55; if (a < 0.0) continue;
+        float front = r - a * (1.05 + 0.25 * float(i));
+        float env = exp(-front * front * 0.9) * exp(-a * 0.5) / (1.0 + r * 1.2);
+        g += (d / r) * vec2(0.6, 1.0) * cos(front * (11.0 - 2.5 * float(i))) * env * (0.36 - 0.09 * float(i));
+      }
+      // the swirl the watch spins out of: three spiral arms winding round the centre, fading as it settles
+      float ang = atan(d.y, d.x);
+      float vort = exp(-r * 1.1) * smoothstep(0.0, 0.3, age) * exp(-age * 0.55);
+      g += vec2(-d.y, d.x) / r * cos(ang * 3.0 + r * 7.0 - age * 5.0) * vort * 0.3;
+      return g * uSplash.w;
+    }
+    vec2 waves(vec2 p, float t){
+      vec2 g = vec2(0.0);
+      // analytic slopes of a few gerstner-ish directional waves
+      const vec4 W[5] = vec4[5](vec4(1.0,0.15,9.0,0.010), vec4(0.8,-0.6,13.0,0.006), vec4(-0.3,1.0,17.0,0.004),
+                                vec4(0.95,0.3,27.0,0.0025), vec4(-0.7,-0.7,35.0,0.0018));
+      for (int i = 0; i < 5; i++){ vec2 d = normalize(W[i].xy); float k = W[i].z;
+        g += d * k * W[i].w * cos(dot(p, d)*k + t*sqrt(k)*1.3); }
+      // slow irregular swell
+      float e = 0.05, n0 = vnoise(vec3(p*2.2, t*0.25));
+      g += vec2(vnoise(vec3((p+vec2(e,0))*2.2, t*0.25)) - n0, vnoise(vec3((p+vec2(0,e))*2.2, t*0.25)) - n0) / e * 0.02;
+      return g;
+    }
+    void main(){
+      vec2 sg = splash(vW.xz);
+      vec2 g = waves(vW.xz, uTime) + sg;
+      vec3 N = normalize(vec3(-g.x, 1.0, -g.y));
+      vec3 V = normalize(cameraPosition - vW);
+      vec4 uv = vUv; uv.xy += N.xz * vec2(0.9, 0.5) * 0.06 * uv.w;   // horizontal streaking like the reference
+      vec3 refl = texture2DProj(tDiffuse, uv).rgb;
+      float fres = 0.02 + 0.98 * pow(1.0 - max(dot(V, N), 0.0), 5.0);
+      vec3 deep = vec3(0.002, 0.0025, 0.0035);
+      vec3 col = mix(deep, refl * color, clamp(0.62 + fres, 0.0, 1.0));
+      // subtle specular glints from the bright sky
+      col += vec3(0.6,0.65,0.75) * pow(max(dot(reflect(-V, N), normalize(vec3(0.0, 0.25, -1.0))), 0.0), 220.0) * 0.6;
+      col += vec3(0.55,0.6,0.7) * smoothstep(0.08, 0.3, length(sg)) * 0.12;   // silver crest highlights on the rings
+      gl_FragColor = vec4(col, 1.0);
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+    }`
+};
+
+// ---------- GPU grass ----------
+function bladeGeometry(segs) {
+  const pos = [], idx = [];
+  for (let s = 0; s < segs; s++) { const t = s / segs; pos.push(-0.5, t, 0, 0.5, t, 0); }
+  pos.push(0, 1, 0);
+  for (let s = 0; s < segs - 1; s++) { const a = s * 2; idx.push(a, a + 1, a + 2, a + 2, a + 1, a + 3); }
+  const a = (segs - 1) * 2; idx.push(a, a + 1, a + 2);
+  const g = new THREE.InstancedBufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx);
+  return g;
+}
+
+const grassMaterial = new THREE.ShaderMaterial({
+  side: THREE.DoubleSide,
+  uniforms: {
+    uTime, uRoot: { value: new THREE.Color(0.006, 0.007, 0.009) }, uTip: { value: new THREE.Color(0.11, 0.12, 0.135) },
+    uFogColor: { value: HORIZON }, uFogNear: { value: FOG.near }, uFogFar: { value: FOG.far },
+    uKeyDir: { value: new THREE.Vector3(0, 6, 14).normalize() }, uBackDir: { value: new THREE.Vector3(0, 0.22, -1).normalize() },
+    uDensity: { value: 1 },
+  },
+  vertexShader: /* glsl */`
+    attribute vec4 aOffset;   // xyz root, w random
+    attribute vec4 aParams;   // yaw, height, width, lean
+    uniform float uTime, uDensity;
+    float grassKeep(float d){ return clamp(1.3 - d / 30.0, 0.35, 1.0); }   // must match grassKeep() in JS
+    varying float vT, vRand, vDist, vGust; varying vec3 vN, vW;
+    void main(){
+      float t = position.y;
+      float c = cos(aParams.x), s = sin(aParams.x);
+      vec3 side = vec3(c, 0.0, s), fwd = vec3(-s, 0.0, c);
+      // gust fronts rolling across the field along the wind direction, plus per-blade flutter
+      const vec2 WD = vec2(0.93, 0.36);
+      float ph = dot(aOffset.xz, WD) * 0.55 - uTime * 1.7 + sin(dot(aOffset.xz, vec2(-WD.y, WD.x)) * 0.35) * 1.4;
+      float gust = 0.5 + 0.5 * sin(ph); gust *= gust;
+      float wind = 0.15 + gust * 0.95 + sin(uTime * 7.0 + aOffset.w * 6.28 + aOffset.x * 2.0) * 0.1;
+      vGust = gust;
+      float dist = distance(cameraPosition, aOffset.xyz);
+      // widen far blades (less shimmer) and by 1/sqrt(kept fraction), so thinned distant grass covers the same ground
+      float w = aParams.z * (1.0 + dist * 0.035) * inversesqrt(grassKeep(dist) * uDensity);
+      vec3 bend = (fwd * aParams.w + vec3(WD.x, 0.0, WD.y) * wind) * t * t * aParams.y;
+      vec3 p = side * position.x * w * (1.0 - t * 0.6) + vec3(0.0, t * aParams.y, 0.0) + bend;
+      p.y -= length(bend) * 0.45 * t;              // keep length roughly constant as it bends
+      vW = aOffset.xyz + p;
+      vN = normalize(fwd + vec3(0.0, 0.8, 0.0) + side * position.x * 0.8);
+      vT = t; vRand = aOffset.w; vDist = dist;
+      gl_Position = projectionMatrix * viewMatrix * vec4(vW, 1.0);
+    }`,
+  fragmentShader: /* glsl */`
+    uniform vec3 uRoot, uTip, uFogColor, uKeyDir, uBackDir; uniform float uFogNear, uFogFar;
+    varying float vT, vRand, vDist, vGust; varying vec3 vN, vW;
+    void main(){
+      vec3 N = normalize(vN) * (gl_FrontFacing ? 1.0 : -1.0);
+      vec3 V = normalize(cameraPosition - vW);
+      vec3 base = mix(uRoot, uTip, pow(vT, 1.4)) * (0.7 + 0.6 * vRand);
+      float ao = mix(0.18, 1.0, smoothstep(0.0, 0.7, vT));
+      float sky = 0.5 + 0.5 * N.y;
+      float key = max(dot(N, uKeyDir), 0.0);
+      float back = pow(max(dot(-V, uBackDir), 0.0), 4.0) * vT * vT;      // silver sheen toward the horizon
+      vec3 col = base * ao * (0.55 * sky + 0.5 * key) + vec3(0.42, 0.46, 0.55) * back * 0.32;
+      col += pow(max(dot(N, normalize(uKeyDir + V)), 0.0), 48.0) * 0.035 * vT;
+      col += vec3(0.42, 0.46, 0.55) * vGust * vT * vT * 0.05;           // flattened blades catch light: gusts read from afar
+      col = mix(col, uFogColor, smoothstep(uFogNear, uFogFar, vDist));
+      gl_FragColor = vec4(col, 1.0);
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+    }`
+});
+
+const grassKeep = (d) => THREE.MathUtils.clamp(1.3 - d / 30, 0.35, 1);   // must match grassKeep() in the shader
+function mulberry32(a) { return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a);
+  t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+
+function buildGrass(buf) {
+  // terrain.bin from Blender: [N, size, minH, maxH, originX, originY] f32, then N*N u16 heights, then N*N u8 grass mask
+  const [N, size, hMin, hMax, ox, oy] = new Float32Array(buf, 0, 6);
+  const hs = new Uint16Array(buf, 24, N * N), mk = new Uint8Array(buf, 24 + N * N * 2, N * N);
+  const sample = (arr, bx, by) => {
+    const fx = THREE.MathUtils.clamp(((bx - ox) / size + 0.5) * (N - 1), 0, N - 1.001);
+    const fy = THREE.MathUtils.clamp(((by - oy) / size + 0.5) * (N - 1), 0, N - 1.001);
+    const i = fx | 0, j = fy | 0, u = fx - i, v = fy - j, k = j * N + i;
+    return (arr[k] * (1 - u) + arr[k + 1] * u) * (1 - v) + (arr[k + N] * (1 - u) + arr[k + N + 1] * u) * v;
+  };
+  const height = (bx, by) => hMin + sample(hs, bx, by) / 65535 * (hMax - hMin);
+
+  const X0 = -18, X1 = 18, Y0 = -15, Y1 = 18, CH = 6;            // Blender XY area, chunk size (m)
+  const cx = Math.ceil((X1 - X0) / CH), cy = Math.ceil((Y1 - Y0) / CH);
+  const chunks = Array.from({ length: cx * cy }, () => ({ off: [], par: [] }));
+  const rnd = mulberry32(1337);
+  const geo = bladeGeometry(Q.segs);
+  for (let n = 0; n < Q.blades * 1.4; n++) {
+    const bx = X0 + rnd() * (X1 - X0), by = Y0 + rnd() * (Y1 - Y0);
+    const m = sample(mk, bx, by) / 255;
+    if (rnd() > m) continue;                                       // pond and shore stay clear
+    const h = height(bx, by);
+    const patch = 0.5 + 0.5 * Math.sin(bx * 0.9 + Math.sin(by * 0.7) * 2) * Math.cos(by * 0.6);
+    const c = chunks[Math.floor((by - Y0) / CH) * cx + Math.floor((bx - X0) / CH)];
+    c.off.push(bx, h - 0.03, -by, rnd());                           // Blender (x,y,z) -> three (x,z,-y)
+    c.par.push(rnd() * Math.PI * 2, (0.07 + 0.13 * rnd() * rnd() + 0.06 * patch) * (0.4 + 0.6 * m),
+               0.022 + 0.014 * rnd(), 0.15 + 0.35 * rnd());
+  }
+  const group = new THREE.Group();
+  for (const c of chunks) {
+    if (!c.off.length) continue;
+    const g = geo.clone();
+    g.setAttribute('aOffset', new THREE.InstancedBufferAttribute(new Float32Array(c.off), 4));
+    g.setAttribute('aParams', new THREE.InstancedBufferAttribute(new Float32Array(c.par), 4));
+    g.instanceCount = c.off.length / 4;
+    const box = new THREE.Box3();
+    for (let i = 0; i < c.off.length; i += 4) box.expandByPoint(new THREE.Vector3(c.off[i], c.off[i + 1], c.off[i + 2]));
+    box.max.y += 0.4; g.boundingSphere = box.getBoundingSphere(new THREE.Sphere()); g.boundingBox = box;
+    const mesh = new THREE.Mesh(g, grassMaterial);                 // per-chunk frustum culling
+    mesh.userData.total = g.instanceCount;                          // blades are in random order: any prefix is an even subset
+    mesh.layers.set(GRASS_LAYER);
+    group.add(mesh);
+  }
+  group.userData = { height, mask: (bx, by) => sample(mk, bx, by) / 255 };
+  return group;
+}
+
+// ---------- Post: MSAA HDR -> bloom -> tonemap -> film grade ----------
+const rt = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: Q.msaa });
+const composer = new EffectComposer(renderer, rt);
+composer.addPass(new RenderPass(scene, camera));
+// any NaN/Inf pixel left would be blurred by bloom into big black rectangles; zero it here
+composer.addPass(new ShaderPass({
+  uniforms: { tDiffuse: { value: null } },
+  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+  fragmentShader: `uniform sampler2D tDiffuse; varying vec2 vUv;
+    void main(){ vec4 c = texture2D(tDiffuse, vUv);
+      gl_FragColor = (any(isnan(c)) || any(isinf(c))) ? vec4(0.0, 0.0, 0.0, 1.0) : clamp(c, 0.0, 64.0); }`
+}));
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.35, 0.7, 0.9);
+// bloom adds colour only: its default additive blend also raises alpha everywhere, which would erase the
+// alpha-0 "keep colour" marks that the glowing flowers and motes leave for the grade
+Object.assign(bloom.blendMaterial, { blending: THREE.CustomBlending, blendSrc: THREE.SrcAlphaFactor, blendDst: THREE.OneFactor,
+  blendSrcAlpha: THREE.ZeroFactor, blendDstAlpha: THREE.OneFactor });
+composer.addPass(bloom);
+const grade = new ShaderPass({
+  uniforms: { tDiffuse: { value: null }, uTime, uRes: { value: new THREE.Vector2() } },
+  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+  fragmentShader: /* glsl */`
+    #include <tonemapping_pars_fragment>
+    uniform sampler2D tDiffuse; uniform float uTime; uniform vec2 uRes; varying vec2 vUv;
+    float h12(vec2 p){ vec3 q = fract(vec3(p.xyx) * .1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
+    void main(){
+      vec4 s = texture2D(tDiffuse, vUv);
+      vec3 c = sRGBTransferOETF(vec4(AgXToneMapping(s.rgb), 1.0)).rgb;   // what OutputPass did, minus a full-screen pass
+      float mono = clamp(s.a, 0.0, 1.0);          // embers lower alpha where they draw: those pixels keep their gold
+      float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+      c = mix(vec3(l), c, mix(1.0, 0.3, mono)) * mix(vec3(1.0), vec3(0.95, 0.985, 1.05), mono);   // near-monochrome, cool
+      c = mix(c, c*c*(3.0 - 2.0*c), 0.35);                                   // gentle S-curve
+      float vig = smoothstep(0.95, 0.25, length((vUv - 0.5) * vec2(uRes.x/uRes.y, 1.0)) * 0.9);
+      c *= mix(0.5, 1.0, vig);
+      float g = h12(vUv * uRes + fract(uTime * 7.31) * 517.0) - 0.5;
+      c += g * mix(0.06, 0.03, l);                                           // film grain, stronger in shadows
+      gl_FragColor = vec4(c, 1.0);
+    }`
+});
+grade.uniforms.uTime = uTime;             // ShaderPass clones uniforms too
+grade.material.toneMapped = false;        // it tone maps itself (above); keeps three from adding its own pars twice
+composer.addPass(grade);
+
+function resize() {
+  renderer.setPixelRatio(pixelRatio); renderer.setSize(innerWidth, innerHeight);
+  composer.setPixelRatio(pixelRatio); composer.setSize(innerWidth, innerHeight);
+  grade.uniforms.uRes.value.set(innerWidth * pixelRatio, innerHeight * pixelRatio);
+  fitFov();
+}
+addEventListener('resize', resize);
+resize();
+
+// ---------- Load ----------
+const draco = new DRACOLoader().setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/libs/draco/gltf/');
+const gltfLoader = new GLTFLoader().setDRACOLoader(draco);
+const [gltf, stonesGltf, flowerGltf, terrainBuf] = await Promise.all([
+  gltfLoader.loadAsync('moon_pond_web.glb'),
+  gltfLoader.loadAsync('stones.glb'),        // shoreline boulders and pebbles, placed in Blender along the real waterline
+  gltfLoader.loadAsync('flower.glb'),        // one glowing flower (stem + bloom), instanced through the grass
+  fetch('terrain.bin').then(r => { if (!r.ok) throw new Error('terrain.bin ' + r.status); return r.arrayBuffer(); }),
+]).catch((e) => {
+  document.getElementById('loading').textContent = 'LOAD FAILED: serve this folder over http (not file://)';
+  throw e;
+});
+
+const root = gltf.scene;
+const stones = [];
+let moon = null;
+root.traverse((o) => {
+  if (!o.isMesh) return;
+  if (o.name.startsWith('Moon')) { moonMaterial(o.material, o.geometry); moon = o; }
+  else if (o.name.startsWith('Monolith')) {
+    rockMaterial(o.material);
+    // geometry is baked in world space; recentre so the stone sways about its own middle
+    const c = new THREE.Box3().setFromObject(o).getCenter(new THREE.Vector3());
+    o.geometry.translate(-c.x, -c.y, -c.z); o.position.add(c);
+    // where it drifts to once the experience opens: up and outward, like curtains parting around the pond
+    const side = Math.sign(c.x), k = stones.length;
+    stones.push({ o, base: o.position.clone(), ph: k * 1.93, sp: 0.85 + 0.1 * (k % 3), delay: 0.18 * k,
+      to: new THREE.Vector3(side * (1.5 + 0.12 * Math.abs(c.x)), 1.1 + 0.5 * (k % 2), -0.6), yaw: side * 0.18 });
+  }
+  else if (o.name.startsWith('Terrain')) groundMaterial(o.material);
+});
+scene.add(root);
+stonesGltf.scene.traverse((o) => { if (o.isMesh) rockMaterial(o.material); });   // same wet basalt as the monoliths
+scene.add(stonesGltf.scene);
+
+const water = root.getObjectByName('Pond_Water_web');
+water.updateWorldMatrix(true, false);
+const wsize = new THREE.Box3().setFromObject(water).getSize(new THREE.Vector3());
+const mirror = new Reflector(new THREE.PlaneGeometry(wsize.x, wsize.z), {
+  shader: WaterShader, color: 0xb8bcc6, clipBias: 0.002, multisample: 0,   // edges are smeared by ripples: MSAA is invisible here
+  textureWidth: Math.round(innerWidth * pixelRatio * Q.reflScale),
+  textureHeight: Math.round(innerHeight * pixelRatio * Q.reflScale),
+});
+mirror.material.uniforms.uTime = uTime;   // Reflector clones uniforms; re-share the clock
+const uSplash = mirror.material.uniforms.uSplash;
+mirror.rotation.x = -Math.PI / 2;
+mirror.position.setFromMatrixPosition(water.matrixWorld);
+water.visible = false;
+scene.add(mirror);
+
+const grass = buildGrass(terrainBuf);
+scene.add(grass);
+
+// ---------- Glowing flowers (flower.glb, made in Blender) spread evenly through the grass; motes lift off the blooms ----------
+{
+  const { height, mask } = grass.userData, rnd = mulberry32(99);
+  const flowers = [];                                                // Blender coords + yaw, scale, gold?
+  const CELL = Q.flowerCell;
+  for (let by = -16; by < 9.5; by += CELL) for (let bx = -16; bx < 16; bx += CELL) {
+    const x = bx + rnd() * CELL * 0.8, y = by + rnd() * CELL * 0.8;   // jittered grid: even, never in rows
+    if (mask(x, y) < 0.8 || y < -9.5) continue;                       // in the grass only, none right under the camera
+    flowers.push([x, y, rnd() * Math.PI * 2, 0.8 + rnd() * 0.5, rnd() < 0.55]);
+  }
+  const geo = {};
+  flowerGltf.scene.updateMatrixWorld(true);
+  flowerGltf.scene.traverse((o) => { if (o.isMesh) geo[o.name] = o.geometry.clone().applyMatrix4(o.matrixWorld); });
+  geo.FlowerBloom.computeBoundingBox();
+  const headLocal = geo.FlowerBloom.boundingBox.getCenter(new THREE.Vector3());
+  // the same world-space breeze as the grass, stronger toward the top of the plant
+  const swayChunk = /* glsl */`
+    vec4 mvPosition = instanceMatrix * vec4(transformed, 1.0);
+    vec2 ip = instanceMatrix[3].xz;
+    float k = position.y / 0.45;
+    mvPosition.xz += vec2(0.93, 0.36) * (0.025 + 0.035 * sin(uTime * 1.4 + dot(ip, vec2(0.51, 0.2)))) * k * k;
+    mvPosition = modelViewMatrix * mvPosition;
+    gl_Position = projectionMatrix * mvPosition;`;
+  const withSway = (m, extraVertex = '') => {
+    m.onBeforeCompile = (sh) => {
+      sh.uniforms.uTime = uTime;
+      sh.vertexShader = 'uniform float uTime;\n' + extraVertex + sh.vertexShader.replace('#include <project_vertex>', swayChunk);
+    };
+    return m;
+  };
+  const stemMat = withSway(new THREE.MeshStandardMaterial({ color: new THREE.Color(0.02, 0.026, 0.03), roughness: 0.8 }));
+  const bloomMat = withSway(new THREE.MeshStandardMaterial({ color: 0x9a9a9a, roughness: 0.5 }), 'varying float vGlow;\n');
+  const prev = bloomMat.onBeforeCompile;
+  bloomMat.onBeforeCompile = (sh) => {
+    prev(sh);
+    sh.vertexShader = sh.vertexShader.replace('#include <begin_vertex>',
+      '#include <begin_vertex>\nvGlow = 1.15 * (0.6 + 0.4 * sin(uTime * 1.1 + dot(instanceMatrix[3].xz, vec2(1.7, 2.3))));');
+    sh.fragmentShader = 'varying float vGlow;\n' + sh.fragmentShader
+      .replace('#include <emissivemap_fragment>', 'totalEmissiveRadiance = vColor * vGlow;')        // glow in the flower's own colour
+      .replace('#include <dithering_fragment>', '#include <dithering_fragment>\ngl_FragColor.a = 0.0;');   // alpha 0: grade keeps the gold
+  };
+  const stems = new THREE.InstancedMesh(geo.FlowerStem, stemMat, flowers.length);
+  const blooms = new THREE.InstancedMesh(geo.FlowerBloom, bloomMat, flowers.length);
+  const GOLD = new THREE.Color(1.0, 0.52, 0.12), WHITE = new THREE.Color(0.85, 0.9, 1.0);   // kept below AgX's bleach-to-white range
+  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), v = new THREE.Vector3(), sc3 = new THREE.Vector3();
+  const heads = [], gold = [];
+  flowers.forEach(([x, y, yaw, s, g], i) => {
+    m4.compose(v.set(x, height(x, y) - 0.02, -y), q.setFromAxisAngle(sc3.set(0, 1, 0), yaw), sc3.setScalar(s));
+    stems.setMatrixAt(i, m4); blooms.setMatrixAt(i, m4); blooms.setColorAt(i, g ? GOLD : WHITE);
+    heads.push(headLocal.clone().applyMatrix4(m4)); gold.push(g);
+  });
+  for (const m of [stems, blooms]) { m.computeBoundingSphere(); scene.add(m); }
+
+  // motes: a few per flower, born at its bloom, rising and drifting into the sky, in the flower's colour
+  const PER = Q.motes, pos = [], seed = [];
+  heads.forEach((h, i) => { for (let k = 0; k < PER; k++) { pos.push(h.x, h.y, h.z); seed.push(rnd(), rnd(), rnd(), gold[i] ? 0 : 1); } });
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('aSeed', new THREE.Float32BufferAttribute(seed, 4));
+  const motes = new THREE.Points(g, new THREE.ShaderMaterial({
+    transparent: true, depthWrite: false,
+    // colour: additive glow; alpha: scaled by (1 - a), which tells the grade to leave these pixels in colour
+    blending: THREE.CustomBlending, blendSrc: THREE.SrcAlphaFactor, blendDst: THREE.OneFactor,
+    blendSrcAlpha: THREE.ZeroFactor, blendDstAlpha: THREE.OneMinusSrcAlphaFactor,
+    uniforms: { uTime, pxPerM },
+    vertexShader: /* glsl */`
+      attribute vec4 aSeed; uniform float uTime, pxPerM; varying vec3 vC; varying float vA;
+      void main(){
+        float period = 9.0 + 7.0 * aSeed.y;
+        float life = fract(uTime / period + aSeed.x);
+        float sway = uTime * (0.3 + 0.25 * aSeed.z) + aSeed.x * 40.0;
+        float lift = life * life * 0.5 + life * 0.5;                    // eases out of the bloom, then climbs
+        vec3 p = position + vec3(sin(sway) * 0.45 * life + life * 1.4, lift * (4.0 + 6.0 * aSeed.z), cos(sway * 0.8) * 0.35 * life - life * 0.5);
+        vec4 mv = modelViewMatrix * vec4(p, 1.0);
+        gl_Position = projectionMatrix * mv;
+        float twinkle = 0.7 + 0.3 * sin(uTime * (2.0 + 3.0 * aSeed.y) + aSeed.z * 60.0);
+        vA = smoothstep(0.0, 0.06, life) * (1.0 - smoothstep(0.45, 1.0, life)) * twinkle;
+        vC = aSeed.w < 0.5 ? vec3(1.0, 0.52, 0.12) * 1.4 : vec3(0.92, 0.95, 1.0) * 1.5;
+        gl_PointSize = clamp(0.08 * pxPerM * (0.5 + aSeed.y) / -mv.z, 1.5, 24.0);
+      }`,
+    fragmentShader: `varying vec3 vC; varying float vA;
+      void main(){ float d = length(gl_PointCoord - 0.5); float m = exp(-d * d * 14.0) - 0.03;
+        if (m <= 0.0) discard; gl_FragColor = vec4(vC * vA * m, vA * m); }`,
+  }));
+  motes.frustumCulled = false;
+  scene.add(motes);
+}
+
+// ---------- Watches: the CZARD 360° frame sets used by home-page/index.html, streamed into the scene ----------
+// Same keys and titles as the home page. Size is measured per watch (see caseFrac) so every case shows the same width.
+const WATCHES = [
+  ['veni', 'Veni'], ['vidi', 'Vidi'], ['vici', 'Vici'],
+  ['ecru', 'ÉCRU'], ['lac-leman', 'LAC LÉMAN'], ['jura-gruen', 'JURA GRUÉN'],
+];
+// Loaded here rather than through spin.js: its images have no crossOrigin, so WebGL couldn't use its canvas.
+const FRAMES = 'https://portal.czard.com/frames/', FSIZE = mobile ? 600 : 1200;   // ~1:1 with the watch on screen
+const manifest = fetch(FRAMES + 'manifest.json').then((r) => r.json()).then((m) => m.watches).catch(() => ({}));
+const loadImg = (src) => new Promise((res, rej) => {
+  const i = new Image(); i.crossOrigin = 'anonymous'; i.decoding = 'async'; i.onload = () => res(i); i.onerror = rej; i.src = src;
+});
+// coarse strides first, like spin.js: a rough turn is ready long before every frame has arrived
+const frameOrder = (n) => { const s = new Set(); for (const st of [9, 3, 1]) for (let i = 0; i < n; i += st) s.add(i); return [...s]; };
+const sets = new Map();
+function frameSet(key) {
+  if (sets.has(key)) return sets.get(key);
+  const s = { n: 0, frames: [] }; sets.set(key, s);
+  manifest.then(async (m) => {
+    const e = m[key]; if (!e) return;
+    s.frames = new Array(e.frames);
+    const name = (i) => `${FRAMES}${e.version}/${key}/${FSIZE}/${String(i + 1).padStart(3, '0')}`;
+    const q = frameOrder(e.frames);
+    const ext = await loadImg(name(0) + '.avif').then((img) => (s.frames[0] = img, 'avif'), () => 'webp');
+    s.n = e.frames;
+    const worker = async () => { while (q.length && !s.dropped) { const i = q.shift(); if (!s.frames[i]) s.frames[i] = await loadImg(name(i) + '.' + ext).catch(() => null); } };
+    await Promise.all(Array.from({ length: 6 }, worker));
+  });
+  return s;
+}
+const nearestFrame = (s, i) => {
+  for (let d = 0; d <= s.n / 2; d++) { const a = s.frames[(i + d) % s.n] || s.frames[(i - d + s.n) % s.n]; if (a) return a; }
+  return null;
+};
+
+const WATER_Y = mirror.position.y;
+const WATCH = { z: 3.6, caseW: 1.25 };          // over the open water; every case is drawn 1.25 m wide
+// rest on the camera's centre line at the watch's depth: the watch sits in the middle of the viewport
+const REST_Y = CAM.exp.pos.y + (CAM.exp.tgt.y - CAM.exp.pos.y) * (CAM.exp.pos.z - WATCH.z) / (CAM.exp.pos.z - CAM.exp.tgt.z);
+// widest opaque row of the front frame, as a fraction of the frame width (the case with its crown)
+function caseFrac(img) {
+  const w = 240, h = Math.round(w / ASPECT), c = document.createElement('canvas'); c.width = w; c.height = h;
+  const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(img, 0, 0, w, h);
+  const d = x.getImageData(0, 0, w, h).data;
+  let best = 0;
+  for (let j = 0; j < h; j++) {
+    let l = -1, r = -1;
+    for (let i = 0; i < w; i++) if (d[(j * w + i) * 4 + 3] > 40) { if (l < 0) l = i; r = i; }
+    if (l >= 0) best = Math.max(best, r - l + 1);
+  }
+  return best ? best / w : 0.3;
+}
+const ASPECT = 16 / 9;                          // every frame set is 1.7778
+// The watch lives on its own layer: drawn after all post-processing (no tone map, grade, grain or bloom on the
+// product), and seen by the pond's reflection camera so the water still mirrors it.
+const WATCH_LAYER = 3;
+mirror.camera.layers.enable(WATCH_LAYER);
+
+// Leaving: the watch burns away bottom-first along a ragged noisy front with a glowing ember edge.
+const DIS_NOISE = /* glsl */`float disN(vec2 uv){ return 0.5*uv.y + 0.5*fbm(vec3(uv*vec2(9.0, 5.0), 3.0)); }
+`;
+
+function makeSlot() {
+  const tex = new THREE.Texture();
+  tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
+  const u = { map: { value: tex }, uDis: { value: -1 }, uWater: { value: WATER_Y } };
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShaderMaterial({
+    uniforms: u, transparent: true, depthWrite: false,
+    vertexShader: `varying vec2 vUv; varying float vY; void main(){ vUv = uv; vY = (modelMatrix * vec4(position, 1.0)).y;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: NOISE + DIS_NOISE + /* glsl */`
+      uniform sampler2D map; uniform float uDis, uWater; varying vec2 vUv; varying float vY;
+      void main(){
+        if (vY < uWater) discard;                                          // drawn without the scene's depth: the pond hides it by hand
+        vec4 t = texture2D(map, vUv);                                      // the render as-is: no grading, no effects
+        float n = disN(vUv);
+        if (n < uDis || t.a < 0.003) discard;
+        vec3 col = t.rgb;
+        if (uDis > -0.5) col += vec3(1.0, 0.62, 0.22) * (1.0 - smoothstep(0.0, 0.035, n - uDis)) * 2.4;   // flaming edge, leaving only
+        gl_FragColor = vec4(col, t.a);
+        #include <colorspace_fragment>
+      }`,
+  }));
+  mesh.layers.set(WATCH_LAYER);
+  scene.add(mesh);
+  return { mesh, tex, u, s: null, startAt: 0, tIn: Infinity, tOut: Infinity, frame: 0, h: 1 };
+}
+const slots = [makeSlot(), makeSlot()];
+
+// Spray: droplets thrown up where the watch breaks the surface, falling back under gravity and fading
+const SPRAY = Q.spray;
+const sprayGeo = new THREE.BufferGeometry();
+{
+  const rnd = mulberry32(7), a = new Float32Array(SPRAY * 4);
+  for (let i = 0; i < a.length; i += 4) { a[i] = rnd() * 2 - 1; a[i + 1] = rnd() * 2 - 1; a[i + 2] = rnd() * rnd(); a[i + 3] = rnd(); }
+  sprayGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(SPRAY * 3), 3));
+  sprayGeo.setAttribute('aSeed', new THREE.BufferAttribute(a, 4));
+}
+const sprayU = { uTime, pxPerM, uT0: { value: -100 }, uOrigin: { value: new THREE.Vector3(0, WATER_Y, WATCH.z) } };
+const spray = new THREE.Points(sprayGeo, new THREE.ShaderMaterial({
+  uniforms: sprayU, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+  vertexShader: /* glsl */`
+    attribute vec4 aSeed; uniform float uTime, uT0, pxPerM; uniform vec3 uOrigin; varying float vA;
+    void main(){
+      float t = uTime - uT0 - aSeed.w * 1.3;                            // keeps coming while case and strap pass through
+      vec3 v = vec3(aSeed.x * 0.9, 1.3 + aSeed.z * 3.2, aSeed.y * 0.7);
+      vec3 p = uOrigin + vec3(aSeed.x * 0.75, 0.0, aSeed.y * 0.12) + v * t + vec3(0.0, -4.9, 0.0) * t * t;
+      vec4 mv = modelViewMatrix * vec4(p, 1.0);
+      gl_Position = projectionMatrix * mv;
+      bool live = t > 0.0 && p.y > uOrigin.y;
+      vA = live ? clamp(1.0 - t / 1.8, 0.0, 1.0) : 0.0;
+      gl_PointSize = live ? 0.026 * pxPerM * (0.6 + aSeed.z) / -mv.z : 0.0;
+    }`,
+  fragmentShader: `varying float vA;
+    void main(){ float m = smoothstep(0.5, 0.1, length(gl_PointCoord - 0.5)); gl_FragColor = vec4(vec3(0.8, 0.85, 0.95) * vA * m, vA * m); }`,
+}));
+spray.frustumCulled = false;
+scene.add(spray);
+
+function updateSlot(sl, t) {
+  const s = sl.s;
+  if (!s) return;
+  if (sl.tIn === Infinity && t >= sl.startAt && s.n && s.frames[0]) {      // breaks the surface once its first frame is in
+    sl.h = WATCH.caseW / (caseFrac(s.frames[0]) * ASPECT);                  // same case width for every watch
+    sl.mesh.scale.set(sl.h * ASPECT, sl.h, 1);
+    sl.tIn = t; uSplash.value.set(0, WATCH.z, t, 1); sprayU.uT0.value = t;
+  }
+  // emergence: a spiral that tightens into the centre while the watch turns one full 360°, landing on its front
+  // the turn and the spiral run at constant speed and stop dead on the front view; only the rise eases in
+  const k = clamp01((t - sl.tIn) / 1.1), e = 1 - Math.pow(1 - k, 3), sw = 1 - k, ang = k * Math.PI * 2;
+  sl.mesh.position.set(Math.sin(ang) * 0.55 * sw,
+    THREE.MathUtils.lerp(WATER_Y - sl.h / 2 - 0.25, REST_Y, e) + Math.sin((t - sl.tIn) * 0.7) * 0.035 * k,
+    WATCH.z + (Math.cos(ang) - 1) * 0.3 * sw);
+  sl.mesh.rotation.z = Math.sin(ang) * 0.06 * sw;
+  if (t - sl.tIn < 1.2) sl.frame = Math.round(s.n * k);                    // lands exactly on the front; then it only turns when dragged
+  const img = s.n ? nearestFrame(s, ((sl.frame % s.n) + s.n) % s.n) : null;
+  if (img && img !== sl.tex.image) { sl.tex.image = img; sl.tex.needsUpdate = true; }
+  sl.mesh.visible = sl.tIn !== Infinity && !!sl.tex.image;
+  if (t >= sl.tOut) {                                                     // leaving: burns away with an ember edge
+    const d = (t - sl.tOut) / 1.9;
+    sl.u.uDis.value = d * 1.15 - 0.05;
+    if (d >= 1) { sl.s = null; sl.mesh.visible = false; }
+  }
+}
+
+// ---------- Experience flow ----------
+const $ = (id) => document.getElementById(id);
+const body = document.body;
+let enterT = -1, cur = -1, active = 0, lockUntil = 0, drag = null, captionTimer = 0;
+for (const [, name] of WATCHES) {
+  const b = document.createElement('button'); b.type = 'button'; b.setAttribute('aria-label', name);
+  b.addEventListener('click', () => go([...$('nav').children].indexOf(b)));
+  $('nav').append(b);
+}
+
+function go(i) {
+  if (enterT < 0 || performance.now() < lockUntil) return;
+  i = (i + WATCHES.length) % WATCHES.length;
+  if (i === cur) return;
+  lockUntil = performance.now() + 2200;
+  const t = uTime.value, first = cur < 0;
+  if (!first) slots[active].tOut = t;
+  const sl = slots[active ^= 1], [key, name] = WATCHES[i];
+  Object.assign(sl, { s: frameSet(key), startAt: t + (first ? 0 : 1.0), tIn: Infinity, tOut: Infinity, frame: 0 });   // frame 0: front view
+  sl.u.uDis.value = -1;
+  cur = i;
+  // keep frames for this watch and the next only (each set is ~65-260 MB decoded); going back re-reads the HTTP cache
+  const keep = new Set([0, 1].map((d) => WATCHES[(i + d) % WATCHES.length][0]));
+  for (const [k, s] of sets) if (!keep.has(k) && !slots.some((x) => x.s === s)) { s.dropped = true; sets.delete(k); }
+  frameSet(WATCHES[(i + 1) % WATCHES.length][0]);
+  body.classList.remove('await-scroll', 'show-caption');
+  [...$('nav').children].forEach((b, j) => b.setAttribute('aria-current', String(j === i)));
+  clearTimeout(captionTimer);
+  captionTimer = setTimeout(() => {
+    $('idx').textContent = `${String(i + 1).padStart(2, '0')} / ${String(WATCHES.length).padStart(2, '0')}`;
+    $('title').textContent = name;
+    $('discover').href = `/products/${key}`;
+    body.classList.add('show-caption');
+  }, (first ? 1100 : 2100));
+}
+
+$('enter').addEventListener('click', () => {
+  if (enterT >= 0) return;
+  enterT = uTime.value;
+  body.classList.add('entered');
+  frameSet(WATCHES[0][0]);                       // start fetching while the camera moves
+  setTimeout(() => { if (cur < 0) body.classList.add('await-scroll'); body.classList.add('show-nav'); $('reveal').focus({ preventScroll: true }); }, 3600);
+});
+$('reveal').addEventListener('click', () => go(cur + 1));
+addEventListener('wheel', (e) => {
+  if (enterT < 0 || Math.abs(e.deltaY) < 12) return;
+  if (cur < 0 && e.deltaY < 0) return;
+  go(cur + Math.sign(e.deltaY));
+}, { passive: true });
+addEventListener('keydown', (e) => {
+  if (enterT < 0) return;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowRight' || e.key === 'PageDown') go(cur + 1);
+  if ((e.key === 'ArrowUp' || e.key === 'ArrowLeft' || e.key === 'PageUp') && cur >= 0) go(cur - 1);
+});
+// touch: vertical swipe changes watch, horizontal drag turns it
+let touchY = null;
+addEventListener('touchstart', (e) => { touchY = e.touches[0].clientY; }, { passive: true });
+addEventListener('touchend', (e) => {
+  if (touchY === null) return;
+  const dy = touchY - e.changedTouches[0].clientY; touchY = null;
+  if (enterT >= 0 && Math.abs(dy) > 60 && !(cur < 0 && dy < 0)) go(cur + Math.sign(dy));
+}, { passive: true });
+renderer.domElement.addEventListener('pointerdown', (e) => {
+  const sl = slots[active];
+  if (cur < 0 || !sl.s || !sl.s.n) return;
+  drag = { x: e.clientX, f: sl.frame, sl };
+});
+addEventListener('pointermove', (e) => {
+  if (drag) drag.sl.frame = drag.f - Math.round((e.clientX - drag.x) / (innerWidth * 0.6 / drag.sl.s.n));   // a turn per 60% of the screen
+});
+addEventListener('pointerup', () => { drag = null; });
+addEventListener('pointercancel', () => { drag = null; });
+
+const watchCam = camera.clone();               // overlay pass camera: sees only the watch layer
+watchCam.layers.set(WATCH_LAYER);
+watchCam.matrixAutoUpdate = false; watchCam.matrixWorldAutoUpdate = false;   // copies the main camera's matrices each frame
+for (const sl of slots) sl.mesh.visible = true;   // so their shaders compile up front
+await renderer.compileAsync(scene, camera);
+await renderer.compileAsync(scene, watchCam);
+for (const sl of slots) sl.mesh.visible = false;
+document.getElementById('loading').remove();
+renderer.domElement.classList.add('ready');
+body.classList.add('ready');
+
+// ---------- Loop with adaptive resolution ----------
+let frames = 0, acc = 0;
+renderer.setAnimationLoop(() => {
+  const dt = clock.getDelta();
+  uTime.value += dt;
+  const t = uTime.value;
+  // camera: eased pull-back after "Enter", with a slow parallax that trails the pointer
+  const e = enterT < 0 ? 0 : easeIO(clamp01((t - enterT) / 4.2));
+  pointerS.lerp(pointer, 0.035);
+  camera.position.lerpVectors(CAM.intro.pos, CAM.exp.pos, e);
+  camera.position.x += pointerS.x * 0.35; camera.position.y -= pointerS.y * 0.14;
+  camera.lookAt(camTgt.lerpVectors(CAM.intro.tgt, CAM.exp.tgt, e));
+  pxPerM.value = renderer.domElement.height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
+  if (moon) moon.rotation.y = t * 0.015;         // ~7 min per turn; craters turn, the lit crescent stays put
+  for (const { o, base, ph, sp, delay, to, yaw } of stones) {   // levitation: bob, drift, faint tilt; part on "Enter"
+    const m = enterT < 0 ? 0 : easeIO(clamp01((t - enterT - delay) / 4.5));
+    o.position.set(base.x + to.x * m + Math.sin(t * 0.21 * sp + ph * 1.7) * 0.05,
+                   base.y + to.y * m + Math.sin(t * 0.45 * sp + ph) * 0.22 + Math.sin(t * 0.17 + ph * 2.3) * 0.08, base.z + to.z * m);
+    o.rotation.set(Math.sin(t * 0.31 * sp + ph) * 0.012, Math.sin(t * 0.13 + ph) * 0.03 + yaw * m, Math.sin(t * 0.27 * sp + ph * 1.3) * 0.014);
+  }
+  for (const sl of slots) updateSlot(sl, t);
+  // grass LOD: each chunk draws the share of its (randomly ordered) blades its distance calls for
+  const density = grassMaterial.uniforms.uDensity.value;
+  for (const c of grass.children) {
+    c.geometry.instanceCount = Math.ceil(c.userData.total * grassKeep(camera.position.distanceTo(c.geometry.boundingSphere.center)) * density);
+  }
+  composer.render(dt);
+  // the product on top, untouched by post (the pond hides its submerged part in-shader; nothing else sits in front)
+  if (slots[0].mesh.visible || slots[1].mesh.visible) {
+    watchCam.matrixWorld.copy(camera.matrixWorld); watchCam.matrixWorldInverse.copy(camera.matrixWorldInverse);
+    watchCam.projectionMatrix.copy(camera.projectionMatrix); watchCam.projectionMatrixInverse.copy(camera.projectionMatrixInverse);
+    renderer.autoClear = false; renderer.clearDepth(); renderer.render(scene, watchCam); renderer.autoClear = true;
+  }
+  // every ~90 frames, if under ~45 fps: thin the far grass first (hard to notice), then lower resolution (floor 0.75);
+  // with headroom, restore in the reverse order
+  acc += dt; if (++frames === 90) {
+    const avg = acc / frames; frames = 0; acc = 0;
+    const cap = Math.min(devicePixelRatio, Q.maxPR), u = grassMaterial.uniforms.uDensity;
+    if (avg > 1 / 45) {
+      if (u.value > 0.6) u.value = Math.max(0.6, u.value - 0.15);
+      else if (pixelRatio > 0.75) { pixelRatio = Math.max(0.75, pixelRatio - 0.15); resize(); }
+    } else if (avg < 1 / 58) {
+      if (pixelRatio < cap) { pixelRatio = Math.min(cap, pixelRatio + 0.1); resize(); }
+      else if (u.value < 1) u.value = Math.min(1, u.value + 0.1);
+    }
+  }
+});
+</script>
+</body>
+</html>

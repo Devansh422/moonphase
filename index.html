@@ -302,7 +302,7 @@ function rockMaterial(m) {
       .replace('#include <color_fragment>', /* glsl */`#include <color_fragment>
         vec3 rp = vW;
         float fw = length(fwidth(vW));                                    // object-space metres per pixel
-        float streak = fbmL(rp*vec3(9.0, 0.6, 9.0), fw*9.0);              // vertical weathering streaks (stones hang)
+        float streak = fbmL(rp*vec3(9.0, 0.6, 9.0), fw*9.0);              // vertical weathering streaks
         float weather = fbmL(rp*1.3 + 7.0, fw*1.3);
         float alb = mix(0.012, 0.034,smoothstep(0.3, 0.75, weather*0.6 + streak*0.5));
         alb *= 0.8 + 0.4*fbmL(rp*18.0, fw*18.0);                         // grainy basalt
@@ -570,25 +570,16 @@ const [gltf, stonesGltf, flowerGltf, terrainBuf] = await Promise.all([
 });
 
 const root = gltf.scene;
-const stones = [];
 let moon = null;
 root.traverse((o) => {
   if (!o.isMesh) return;
-  if (o.name.startsWith('Moon')) { moonMaterial(o.material, o.geometry); moon = o; }
-  else if (o.name.startsWith('Monolith')) {
-    rockMaterial(o.material);
-    // geometry is baked in world space; recentre so the stone sways about its own middle
-    const c = new THREE.Box3().setFromObject(o).getCenter(new THREE.Vector3());
-    o.geometry.translate(-c.x, -c.y, -c.z); o.position.add(c);
-    // where it drifts to once the experience opens: up and outward, like curtains parting around the pond
-    const side = Math.sign(c.x), k = stones.length;
-    stones.push({ o, base: o.position.clone(), ph: k * 1.93, sp: 0.85 + 0.1 * (k % 3), delay: 0.18 * k,
-      to: new THREE.Vector3(side * (1.5 + 0.12 * Math.abs(c.x)), 1.1 + 0.5 * (k % 2), -0.6), yaw: side * 0.18 });
-  }
+  if (o.name.startsWith('Moon')) { moonMaterial(o.material, o.geometry); moon = o; o.scale.multiplyScalar(1.18); }   // a little larger than the Blender export
   else if (o.name.startsWith('Terrain')) groundMaterial(o.material);
 });
+// the hanging monolith pillars are left out of this design (open sky round the moon)
+for (const o of root.children.filter((c) => c.name.startsWith('Monolith'))) { o.removeFromParent(); o.geometry.dispose(); o.material.dispose(); }
 scene.add(root);
-stonesGltf.scene.traverse((o) => { if (o.isMesh) rockMaterial(o.material); });   // same wet basalt as the monoliths
+stonesGltf.scene.traverse((o) => { if (o.isMesh) rockMaterial(o.material); });   // wet basalt shoreline
 scene.add(stonesGltf.scene);
 
 const water = root.getObjectByName('Pond_Water_web');
@@ -733,7 +724,7 @@ const nearestFrame = (s, i) => {
 };
 
 const WATER_Y = mirror.position.y;
-const WATCH = { z: 3.6, caseW: 1.25 };          // over the open water; every case is drawn 1.25 m wide
+const WATCH = { z: 3.6, caseW: 1.35 };          // over the open water; every case is drawn 1.35 m wide
 // rest on the camera's centre line at the watch's depth: the watch sits in the middle of the viewport
 const REST_Y = CAM.exp.pos.y + (CAM.exp.tgt.y - CAM.exp.pos.y) * (CAM.exp.pos.z - WATCH.z) / (CAM.exp.pos.z - CAM.exp.tgt.z);
 // widest opaque row of the front frame, as a fraction of the frame width (the case with its crown)
@@ -939,13 +930,7 @@ renderer.setAnimationLoop(() => {
   camera.position.x += pointerS.x * 0.35; camera.position.y -= pointerS.y * 0.14;
   camera.lookAt(camTgt.lerpVectors(CAM.intro.tgt, CAM.exp.tgt, e));
   pxPerM.value = renderer.domElement.height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
-  if (moon) moon.rotation.y = t * 0.015;         // ~7 min per turn; craters turn, the lit crescent stays put
-  for (const { o, base, ph, sp, delay, to, yaw } of stones) {   // levitation: bob, drift, faint tilt; part on "Enter"
-    const m = enterT < 0 ? 0 : easeIO(clamp01((t - enterT - delay) / 4.5));
-    o.position.set(base.x + to.x * m + Math.sin(t * 0.21 * sp + ph * 1.7) * 0.05,
-                   base.y + to.y * m + Math.sin(t * 0.45 * sp + ph) * 0.22 + Math.sin(t * 0.17 + ph * 2.3) * 0.08, base.z + to.z * m);
-    o.rotation.set(Math.sin(t * 0.31 * sp + ph) * 0.012, Math.sin(t * 0.13 + ph) * 0.03 + yaw * m, Math.sin(t * 0.27 * sp + ph * 1.3) * 0.014);
-  }
+  if (moon) moon.rotation.y = t * 0.05;          // ~2 min per turn; craters turn, the lit crescent stays put
   for (const sl of slots) updateSlot(sl, t);
   // grass LOD: each chunk draws the share of its (randomly ordered) blades its distance calls for
   const density = grassMaterial.uniforms.uDensity.value;

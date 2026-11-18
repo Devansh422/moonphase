@@ -107,6 +107,9 @@ const Q = {
   mid:  { maxPR: 1.5,  msaa: 2 },                // 2x MSAA: keeps the moon's limb from stair-stepping
   low:  { maxPR: 1.0,  msaa: 0 },
 }[TIER];
+// phones are 2-3x screens: rendering the scene at 1.0-1.5x left the moon and sky soft. Start them at 2x; the adaptive
+// loop below still steps it down if a phone can't hold ~45 fps. (Safari reports no deviceMemory, so many land in 'low'.)
+if (mobile) Q.maxPR = 2;
 
 // ---------- Renderer / scene / camera ----------
 const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
@@ -418,7 +421,8 @@ const WATCHES = [
   ['ecru', 'ÉCRU'], ['lac-leman', 'LAC LÉMAN'], ['jura-gruen', 'JURA GRUÉN'],
 ];
 // Loaded here rather than through spin.js: its images have no crossOrigin, so WebGL couldn't use its canvas.
-const FRAMES = 'https://portal.czard.com/frames/', FSIZE = mobile ? 600 : 1200;   // ~1:1 with the watch on screen
+// 1200 everywhere: the case fills only part of each frame, so on a 3x phone screen the 600 set was upscaled ~3x (blurry)
+const FRAMES = 'https://portal.czard.com/frames/', FSIZE = 1200;
 const manifest = fetch(FRAMES + 'manifest.json').then((r) => r.json()).then((m) => m.watches).catch(() => ({}));
 const loadImg = (src) => new Promise((res, rej) => {
   const i = new Image(); i.crossOrigin = 'anonymous'; i.decoding = 'async'; i.onload = () => res(i); i.onerror = rej; i.src = src;
@@ -580,10 +584,11 @@ function go(i) {
   // the new watch comes in as the old one reaches its back view (a little overlap hides the hand-off)
   Object.assign(sl, { s: frameSet(key), startAt: t + (first ? 0 : FLICK.out * 0.8), tIn: Infinity, tOut: Infinity, frame: 0, flick: dir });
   cur = i;
-  // keep frames for this watch and the next only (each set is ~65-260 MB decoded); going back re-reads the HTTP cache
-  const keep = new Set([0, 1].map((d) => WATCHES[(i + d) % WATCHES.length][0]));
+  // keep frames for this watch and the next only (a 1200 set is ~240 MB decoded); going back re-reads the HTTP cache.
+  // Phones keep just the current one (plus the outgoing watch until its flick ends) so the tab isn't killed for memory.
+  const keep = new Set((mobile ? [0] : [0, 1]).map((d) => WATCHES[(i + d) % WATCHES.length][0]));
   for (const [k, s] of sets) if (!keep.has(k) && !slots.some((x) => x.s === s)) { s.dropped = true; sets.delete(k); }
-  frameSet(WATCHES[(i + 1) % WATCHES.length][0]);
+  if (!mobile) frameSet(WATCHES[(i + 1) % WATCHES.length][0]);
   body.classList.remove('show-caption');
   [...$('nav').children].forEach((b, j) => b.setAttribute('aria-current', String(j === i)));
   clearTimeout(captionTimer);
@@ -636,7 +641,8 @@ addEventListener('pointercancel', () => { drag = null; });
 const watchR = new THREE.WebGLRenderer({ alpha: true, antialias: true });
 watchR.domElement.className = 'watch-canvas';
 document.body.appendChild(watchR.domElement);
-const sizeWatchR = () => { watchR.setPixelRatio(pixelRatio); watchR.setSize(innerWidth, innerHeight); };
+// one textured quad is cheap at any resolution: always the screen's full density (up to 3x), never the adaptive ratio
+const sizeWatchR = () => { watchR.setPixelRatio(Math.min(devicePixelRatio, 3)); watchR.setSize(innerWidth, innerHeight); };
 sizeWatchR(); addEventListener('resize', sizeWatchR);
 const watchCam = camera.clone();               // overlay pass camera: sees only the watch layer
 watchCam.layers.set(WATCH_LAYER);

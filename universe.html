@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Deep Space</title>
+<style>
+  html,body{margin:0;height:100%;background:#000;overflow:hidden;cursor:grab}
+  body:active{cursor:grabbing}
+  canvas{display:block;width:100vw;height:100vh}
+  #hud{position:fixed;left:16px;bottom:14px;font:12px/1.4 system-ui,sans-serif;color:#fff6;pointer-events:none;user-select:none}
+  #err{position:fixed;inset:0;display:none;place-items:center;color:#ccc;font:16px system-ui,sans-serif;text-align:center;padding:16px}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">Drag to look around · Scroll to zoom</div>
+<div id="err">This page needs WebGL2. Try a recent Chrome, Edge, Firefox or Safari.</div>
+
+<!-- Shared by both passes. SCENE pass: smooth Milky Way glow and distant galaxy at adaptive resolution.
+     STARS pass: crisp point stars at full native resolution, added over the scene. -->
+<script id="fs" type="x-shader/x-fragment">
+precision highp float;
+uniform vec2 uRes;
+uniform float uTime;
+uniform vec2 uLook;   // yaw, pitch
+uniform float uFov;
+uniform sampler2D uScene;
+out vec4 outColor;
+
+const float SCENE_ENC = .25; // scene stored as col*0.25 so 8-bit fallback keeps some headroom
+
+// ---------- noise ----------
+float hash13(vec3 p){ p=fract(p*.1031); p+=dot(p,p.zyx+31.32); return fract((p.x+p.y)*p.z); }
+vec3 hash33(vec3 p){ p=fract(p*vec3(.1031,.1030,.0973)); p+=dot(p,p.yxz+33.33); return fract((p.xxy+p.yxx)*p.zyx); }
+float noise(vec3 x){
+  vec3 i=floor(x), f=fract(x); f=f*f*(3.-2.*f);
+  return mix(mix(mix(hash13(i),hash13(i+vec3(1,0,0)),f.x),mix(hash13(i+vec3(0,1,0)),hash13(i+vec3(1,1,0)),f.x),f.y),
+             mix(mix(hash13(i+vec3(0,0,1)),hash13(i+vec3(1,0,1)),f.x),mix(hash13(i+vec3(0,1,1)),hash13(i+1.),f.x),f.y),f.z);
+}
+float fbm3(vec3 p){ float s=0.,a=.5; for(int i=0;i<3;i++){ s+=a*noise(p); p=p*2.03+vec3(1.7,9.2,3.1); a*=.5; } return s/.875; }
+float fbm5(vec3 p){ float s=0.,a=.5; for(int i=0;i<5;i++){ s+=a*noise(p); p=p*2.03+vec3(1.7,9.2,3.1); a*=.5; } return s/.96875; }
+
+// ---------- camera ----------
+vec3 cf, camR, camU; vec2 uv;
+vec3 setupCamera(){
+  uv=(gl_FragCoord.xy-.5*uRes)/uRes.y;
+  float yaw=uLook.x, pit=uLook.y;
+  cf=normalize(vec3(sin(yaw)*cos(pit),sin(pit),cos(yaw)*cos(pit)));
+  camR=normalize(cross(vec3(0,1,0),cf)); camU=cross(cf,camR);
+  return normalize(cf+uFov*(uv.x*camR+uv.y*camU));
+}
+// offset (in pixels) from this pixel to direction s on screen: keeps stars round even at the edges
+vec2 pxOffset(vec3 s){
+  float z=dot(s,cf); if(z<=0.) return vec2(1e4);
+  return (uv-vec2(dot(s,camR),dot(s,camU))/(z*uFov))*uRes.y;
+}
+
+// Blackbody colour (Tanner Helland fit), linear space
+vec3 blackbody(float T){
+  float t=T/100.;
+  float r=t<=66.?1.:clamp(1.292936*pow(t-60.,-.1332047),0.,1.);
+  float g=t<=66.?clamp(.3900816*log(t)-.6318414,0.,1.):clamp(1.1298909*pow(t-60.,-.0755148),0.,1.);
+  float b=t>=66.?1.:(t<=19.?0.:clamp(.5432068*log(t-10.)-1.1962541,0.,1.));
+  return pow(vec3(r,g,b),vec3(2.2));
+}
+// Most stars are cool K/M dwarfs; hot O/B stars are rare
+vec3 starTint(float h){ vec3 c=blackbody(2400.+28000.*pow(h,3.5)); return mix(vec3(1),c/max(max(c.r,c.g),c.b),.6); }
+
+// Point-spread function in pixel space: tight core, faint halo, diffraction spikes on bright stars.
+// glow (0..1) softly blooms the halo.
+vec3 psf(vec2 d, float lum, vec3 tint, float glow){
+  float r2=dot(d,d);
+  if(r2>4e3) return vec3(0);
+  float v=exp(-r2*1.1);                                   // ~0.67px sigma core
+  v+=.015*min(lum,6.)*(1.+5.*glow)/(1.+r2*(.35-.25*glow)); // halo
+  if(lum>2.5){
+    float dx=abs(d.x), dy=abs(d.y);
+    v+=(exp(-dx*1.6-dy*.14)+exp(-dy*1.6-dx*.14))*.035*min(lum,30.)/lum;
+  }
+  return tint*lum*v;
+}
+
+const vec3 GN=vec3(.3244,.9268,-.2317);  // galactic plane normal (normalised)
+
+#ifdef STARS
+// Stars live on a cube map: each face is a 2D grid, one optional star per cell.
+// A 3x3 search covers every star within 1 cell, and halos fade before that, so nothing clips.
+// shortcut: a halo straddling a cube-face edge can still clip; rare, add cross-face lookup if it shows.
+vec3 starLayer(vec3 rd, float scale, float prob, float bright, float layer){
+  vec3 a=abs(rd); vec2 fuv; float f, sg;
+  if(a.x>=a.y&&a.x>=a.z){ fuv=rd.yz/a.x; sg=sign(rd.x); f=0.; }
+  else if(a.y>=a.z){ fuv=rd.xz/a.y; sg=sign(rd.y); f=1.; }
+  else { fuv=rd.xy/a.z; sg=sign(rd.z); f=2.; }
+  float fk=f*3.+sg+layer*10.;
+  vec2 g=fuv*scale, c=floor(g);
+  vec3 col=vec3(0);
+  for(int j=-1;j<=1;j++) for(int i=-1;i<=1;i++){
+    vec2 id=c+vec2(i,j);
+    vec3 h=hash33(vec3(id,fk));
+    if(h.x>prob) continue;
+    vec2 sp=id+.1+.8*hash33(vec3(id,fk)+17.3).xy;
+    float w=1.-smoothstep(.55,1.,length(g-sp));
+    if(w<=0.) continue;
+    sp/=scale;
+    vec3 s=normalize(f==0.?vec3(sg,sp):f==1.?vec3(sp.x,sg,sp.y):vec3(sp,sg));
+    float lum=bright*(.03+.25*pow(h.y,4.)+25.*pow(h.y,60.));
+    // ~35% of stars swell into a slow, soft glow now and then, each on its own rhythm
+    vec3 r=hash33(vec3(id,fk)+41.7);
+    float glow=r.x<.35?pow(.5+.5*sin(uTime*(.15+.45*r.y)+r.z*6.2832),14.):0.;
+    col+=psf(pxOffset(s),lum*(1.+.9*glow),starTint(h.z),glow)*w;
+  }
+  return col;
+}
+
+void main(){
+  vec3 rd=setupCamera();
+  vec4 sc=texture(uScene,gl_FragCoord.xy/uRes);
+  vec3 col=sc.rgb/SCENE_ENC;
+  float T=sc.a; // star visibility from the scene pass (always 1 now; kept so occluders can be re-added)
+  if(T>.003){
+    float lat=dot(rd,GN), band=exp(-lat*lat*14.);
+    float lane=smoothstep(.42,.7,fbm5(rd*6.5+7.))*exp(-lat*lat*60.);
+    float dens=1.+3.*band*(1.-lane);
+    vec3 st=starLayer(rd,45.,.04,1.,0.);
+    st+=starLayer(rd,110.,.025*dens,.6,1.);
+    st+=starLayer(rd,240.,.02*dens,.35,2.)*(1.-lane*.8);
+    col+=st*T;
+  }
+  col*=1.1;
+  col=clamp((col*(2.51*col+.03))/(col*(2.43*col+.59)+.14),0.,1.); // ACES
+  col*=1.-.35*dot(uv,uv);
+  col=pow(col,vec3(1./2.2));
+  col+=(hash13(vec3(gl_FragCoord.xy,fract(uTime)*100.))-.5)/128.; // dither / grain
+  outColor=vec4(col,1);
+}
+#endif
+
+#ifdef SCENE
+// Smooth background light only: galactic band glow, dust lanes and a distant galaxy.
+void main(){
+  vec3 rd=setupCamera();
+  vec3 bg=vec3(0);
+  float lat=dot(rd,GN);
+  float band=exp(-lat*lat*14.);
+  float mw=fbm5(rd*3.2);
+  float lane=smoothstep(.42,.7,fbm5(rd*6.5+7.))*exp(-lat*lat*60.);
+  bg+=vec3(.75,.7,.85)*band*mw*mw*.09*(1.-lane*.9);
+  bg+=vec3(.9,.75,.6)*exp(-lat*lat*90.)*mw*.04*(1.-lane);
+
+  // distant spiral galaxy
+  vec3 G=normalize(vec3(.62,.48,.62));
+  if(dot(rd,G)>.99){
+    vec3 gx=normalize(cross(G,vec3(.3,1,.1))), gy=cross(G,gx);
+    vec2 g=vec2(dot(rd,gx),dot(rd,gy))/.022;
+    g=mat2(.8,-.6,.6,.8)*g; g.y/=.42;
+    float r=length(g), a=atan(g.y,g.x);
+    float arm=.5+.5*cos(2.*(a-log(r+1e-3)*2.6));
+    float disk=exp(-r*2.6)*(.35+.65*arm*smoothstep(.05,.4,r))*(.6+.4*noise(vec3(g*6.,1)));
+    bg+=vec3(.75,.8,1.)*disk*.35+vec3(1.,.85,.6)*exp(-r*r*30.)*.9;
+  }
+  outColor=vec4(bg*SCENE_ENC,1.);
+}
+#endif
+</script>
+
+<script>
+const canvas = document.getElementById('c');
+const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, powerPreference: 'high-performance' });
+if (!gl) { document.getElementById('err').style.display = 'grid'; throw new Error('WebGL2 unavailable'); }
+
+const VS = `#version 300 es
+void main(){ vec2 p=vec2((gl_VertexID<<1)&2, gl_VertexID&2); gl_Position=vec4(p*2.-1.,0,1); }`;
+const FS = document.getElementById('fs').textContent;
+function compile(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src); gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+}
+function program(define) {
+  const p = gl.createProgram();
+  gl.attachShader(p, compile(gl.VERTEX_SHADER, VS));
+  gl.attachShader(p, compile(gl.FRAGMENT_SHADER, `#version 300 es\n#define ${define}\n${FS}`));
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
+  const u = {};
+  for (const n of ['uRes', 'uTime', 'uLook', 'uFov', 'uScene']) u[n] = gl.getUniformLocation(p, n);
+  return { p, u };
+}
+const scenePass = program('SCENE'), starPass = program('STARS');
+gl.bindVertexArray(gl.createVertexArray());
+
+// Offscreen HDR target for the (expensive) scene pass
+const half = !!gl.getExtension('EXT_color_buffer_float');
+const sceneTex = gl.createTexture(), sceneFbo = gl.createFramebuffer();
+gl.bindTexture(gl.TEXTURE_2D, sceneTex);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+// Stars render at full native resolution; only the scene pass scales to hold frame rate.
+const dpr = Math.min(devicePixelRatio || 1, 2);
+let sceneScale = 0.5, sw = 1, sh = 1;
+function resize() {
+  canvas.width = Math.max(1, innerWidth * dpr | 0);
+  canvas.height = Math.max(1, innerHeight * dpr | 0);
+  sw = Math.max(1, canvas.width * sceneScale | 0);
+  sh = Math.max(1, canvas.height * sceneScale | 0);
+  gl.bindTexture(gl.TEXTURE_2D, sceneTex);
+  // shortcut: without float render targets the scene is 8-bit (banding in faint gas); nearly all WebGL2 desktops have it
+  gl.texImage2D(gl.TEXTURE_2D, 0, half ? gl.RGBA16F : gl.RGBA8, sw, sh, 0, gl.RGBA, half ? gl.HALF_FLOAT : gl.UNSIGNED_BYTE, null);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, sceneFbo);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, sceneTex, 0);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+}
+addEventListener('resize', resize); resize();
+
+// Look controls with inertia
+let yaw = 0.12, pitch = 0.02, vy = 0, vp = 0, fov = 1.25, fovTarget = 1.25, drag = null;
+addEventListener('pointerdown', e => { drag = { x: e.clientX, y: e.clientY }; });
+addEventListener('pointerup', () => drag = null);
+addEventListener('pointermove', e => {
+  if (!drag) return;
+  const k = 0.0025 * fov;
+  vy -= (e.clientX - drag.x) * k; vp += (e.clientY - drag.y) * k;
+  drag = { x: e.clientX, y: e.clientY };
+});
+addEventListener('wheel', e => { fovTarget = Math.min(2, Math.max(0.2, fovTarget * Math.exp(e.deltaY * 0.001))); }, { passive: true });
+
+function setCommon(pass, w, h, time) {
+  gl.useProgram(pass.p);
+  gl.uniform2f(pass.u.uRes, w, h);
+  gl.uniform1f(pass.u.uTime, time);
+  gl.uniform2f(pass.u.uLook, yaw, pitch);
+  gl.uniform1f(pass.u.uFov, fov);
+}
+
+let last = performance.now(), avg = 16, lastAdjust = 0;
+const t0 = last;
+function frame(now) {
+  const dt = now - last; last = now;
+  avg += (dt - avg) * 0.05;
+  if (now - lastAdjust > 1000) {
+    lastAdjust = now;
+    if (avg > 24 && sceneScale > 0.25) { sceneScale *= 0.85; resize(); }
+    else if (avg < 15 && sceneScale < 1) { sceneScale = Math.min(1, sceneScale * 1.1); resize(); }
+  }
+  yaw += vy * 0.15; pitch += vp * 0.15; vy *= 0.85; vp *= 0.85;
+  pitch = Math.max(-1.45, Math.min(1.45, pitch));
+  fov += (fovTarget - fov) * 0.08;
+  const time = (now - t0) / 1000;
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, sceneFbo);
+  gl.viewport(0, 0, sw, sh);
+  setCommon(scenePass, sw, sh, time);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  setCommon(starPass, canvas.width, canvas.height, time);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, sceneTex);
+  gl.uniform1i(starPass.u.uScene, 0);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

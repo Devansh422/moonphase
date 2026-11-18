@@ -4,19 +4,23 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>House of CZARD</title>
+<!-- the import map must come before any modulepreload, or the preloaded modules fail to resolve "three" -->
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+} }
+</script>
 <!-- start every download at once instead of discovering them module by module -->
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <link rel="preconnect" href="https://portal.czard.com" crossorigin>
 <link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js">
 <link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/loaders/GLTFLoader.js">
 <link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/loaders/DRACOLoader.js">
-<link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/objects/Reflector.js">
 <link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/postprocessing/EffectComposer.js">
 <link rel="modulepreload" href="https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/postprocessing/UnrealBloomPass.js">
 <link rel="preload" href="moon_pond_web.glb" as="fetch" crossorigin>
-<link rel="preload" href="stones.glb" as="fetch" crossorigin>
-<link rel="preload" href="flower.glb" as="fetch" crossorigin>
-<link rel="preload" href="terrain.bin" as="fetch" crossorigin>
+<link rel="preload" href="moon_color_4k.jpg" as="image">
 <link rel="preload" href="https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/libs/draco/gltf/draco_decoder.wasm" as="fetch" crossorigin>
 <link rel="preload" href="home-page/assets/cormorant-garamond-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="home-page/assets/jost-latin.woff2" as="font" type="font/woff2" crossorigin>
@@ -26,6 +30,7 @@
   html, body { margin: 0; height: 100%; background: #07090d; overflow: hidden; color: #f4efe6; font-family: 'Jost', sans-serif; }
   canvas { display: block; opacity: 0; transition: opacity 1.6s ease; touch-action: none; }
   canvas.ready { opacity: 1; }
+  .watch-canvas { position: fixed; inset: 0; z-index: 1; pointer-events: none; }   /* drags reach the main canvas below */
   .entered canvas { cursor: grab; }
   .entered canvas:active { cursor: grabbing; }
   #loading { position: fixed; inset: 0; display: grid; place-items: center; color: #8a93a5;
@@ -55,12 +60,6 @@
   .show-caption .caption .btn { pointer-events: auto; }
   .idx { margin: 0 0 .7rem; font: 400 .62rem/1 'Jost', sans-serif; letter-spacing: .4em; opacity: .65; }
   .caption h2 { margin: 0 0 1.3rem; font: 300 clamp(2rem, 4.4vw, 3.4rem)/1 'Cormorant Garamond', serif; letter-spacing: .14em; }
-  .reveal { position: fixed; left: 50%; bottom: 2.8rem; z-index: 2; transform: translateX(-50%); background: none; border: 0; color: #f4efe6; cursor: pointer;
-    font: 400 .62rem/1 'Jost', sans-serif; letter-spacing: .4em; text-transform: uppercase; opacity: 0; pointer-events: none;
-    display: flex; flex-direction: column; align-items: center; gap: 1rem; padding: 8px 16px; }
-  .reveal::after { content: ''; width: 1px; height: 44px; background: linear-gradient(#f4efe6, transparent); animation: drip 2.4s ease-in-out infinite; transform-origin: top; }
-  @keyframes drip { 0% { transform: scaleY(0); opacity: 1; } 60% { transform: scaleY(1); opacity: 1; } 100% { transform: scaleY(1); opacity: 0; } }
-  .await-scroll .reveal { opacity: .85; pointer-events: auto; }
   .nav { position: fixed; right: clamp(16px, 2.4vw, 40px); top: 50%; transform: translateY(-50%); z-index: 2; display: flex; flex-direction: column; gap: .9rem; opacity: 0; pointer-events: none; }
   .show-nav .nav { opacity: 1; pointer-events: auto; }
   .nav button { width: 18px; height: 18px; padding: 0; border: 0; background: none; cursor: pointer; display: grid; place-items: center; }
@@ -68,14 +67,8 @@
   .nav button[aria-current="true"]::before { background: #f4efe6; transform: scale(1.5); }
   .nav button:focus-visible { outline: 1px solid rgba(244,239,230,.6); }
   @media (max-width: 760px) { .nav { right: 10px; } .caption { bottom: 2rem; } }
-  @media (prefers-reduced-motion: reduce) { .fade { transition-duration: .01s; } .reveal::after { animation: none; } }
+  @media (prefers-reduced-motion: reduce) { .fade { transition-duration: .01s; } }
 </style>
-<script type="importmap">
-{ "imports": {
-  "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
-  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
-} }
-</script>
 </head>
 <body>
 <div id="loading">LOADING</div>
@@ -86,7 +79,6 @@
   <p class="sub">Step into an immersive world of Swiss craft, Geneva heritage, and watches shaped by precision.</p>
   <button class="btn" id="enter" type="button">Enter Experience</button>
 </section>
-<button class="reveal fade" id="reveal" type="button">Scroll to reveal</button>
 <div class="caption fade" aria-live="polite">
   <p class="idx" id="idx"></p>
   <h2 id="title"></h2>
@@ -97,29 +89,24 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
-import { Reflector } from 'three/addons/objects/Reflector.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 
 // ---------- Quality tier: ?q=low|mid|high overrides auto-detect ----------
-// Tiers only change how much work is done (counts, buffer sizes), never what the scene looks like; the adaptive loop
-// at the bottom then trims resolution and far grass further if a device still can't hold ~45 fps.
+// Tiers only change how much work is done (buffer sizes), never what the scene looks like; the adaptive loop
+// at the bottom then trims resolution further if a device still can't hold ~45 fps.
 const qParam = new URLSearchParams(location.search).get('q');
 const mobile = matchMedia('(pointer: coarse)').matches || Math.min(innerWidth, innerHeight) < 700;
 const cores = navigator.hardwareConcurrency || 4, mem = navigator.deviceMemory || (mobile ? 4 : 8);
 const TIER = ['low', 'mid', 'high'].includes(qParam) ? qParam
   : mobile ? (cores <= 4 || mem <= 3 ? 'low' : 'mid') : (cores >= 6 && mem >= 8 ? 'high' : 'mid');
 const Q = {
-  high: { blades: 380000, segs: 3, maxPR: 1.75, msaa: 4, reflScale: 0.5, moon: 768, flowerCell: 1.25, motes: 4, spray: 1100 },
-  mid:  { blades: 180000, segs: 2, maxPR: 1.5,  msaa: 0, reflScale: 0.4, moon: 512, flowerCell: 1.45, motes: 3, spray: 650 },
-  low:  { blades: 100000, segs: 2, maxPR: 1.0,  msaa: 0, reflScale: 0.3, moon: 512, flowerCell: 1.7,  motes: 2, spray: 400 },
+  high: { maxPR: 1.75, msaa: 4 },
+  mid:  { maxPR: 1.5,  msaa: 2 },                // 2x MSAA: keeps the moon's limb from stair-stepping
+  low:  { maxPR: 1.0,  msaa: 0 },
 }[TIER];
-
-const HORIZON = new THREE.Color(0x8f98aa), ZENITH = new THREE.Color(0x06080c);
-const FOG = { near: 12, far: 70 };
-const GRASS_LAYER = 1; // grass is skipped by the pond reflection (big perf win, edge is hidden by ripples)
 
 // ---------- Renderer / scene / camera ----------
 const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
@@ -131,11 +118,9 @@ renderer.toneMappingExposure = 1.15;
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.Fog(HORIZON, FOG.near, FOG.far);
 
-const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.05, 400);
+const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.05, 1000);
 camera.position.set(0, 2, 10.5);
-camera.layers.enable(GRASS_LAYER);
 function fitFov() { // Blender: 28mm lens on 36mm sensor
   const aspect = innerWidth / innerHeight;
   camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(Math.atan(18 / 28)) / Math.max(aspect, 4 / 3)));
@@ -149,8 +134,12 @@ const CAM = {
   exp:   { pos: new THREE.Vector3(0, 2.25, 12.8), tgt: new THREE.Vector3(0, 1.05, 0) },
 };
 const camTgt = new THREE.Vector3(), pointer = new THREE.Vector2(), pointerS = new THREE.Vector2();
-addEventListener('pointermove', (e) => pointer.set(e.clientX / innerWidth * 2 - 1, e.clientY / innerHeight * 2 - 1));
+// mobile: no cursor parallax (a finger dragging the watch shouldn't swing the whole scene); pointer stays centred
+if (!mobile) addEventListener('pointermove', (e) => pointer.set(e.clientX / innerWidth * 2 - 1, e.clientY / innerHeight * 2 - 1));
 const easeIO = (x) => x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+// quintic smootherstep: zero speed AND zero acceleration at both ends, so the entrance glides off and lands without a kick
+const smoother = (x) => x * x * x * (x * (x * 6 - 15) + 10);
+const ENTER = { dur: 5.2, reveal: 0.82 };       // intro -> watch view seconds; progress at which the first watch flicks in
 const clamp01 = (x) => Math.min(Math.max(x, 0), 1);
 
 // ---------- Shared GLSL noise ----------
@@ -163,345 +152,175 @@ float vnoise(vec3 p){
              mix(mix(hash13(i+vec3(0,0,1)), hash13(i+vec3(1,0,1)), f.x), mix(hash13(i+vec3(0,1,1)), hash13(i+vec3(1,1,1)), f.x), f.y), f.z);
 }
 float fbm(vec3 p){ float s = 0.0, a = 0.5; for (int i = 0; i < 5; i++){ s += a*vnoise(p); p = p*2.03 + 1.7; a *= 0.5; } return s; }
-// fbm that skips octaves finer than a pixel (px = screen footprint of p): those only shimmer. Skipped octaves add their
-// mean (0.5) so overall brightness doesn't change; the cut-off fades so there's no pop.
-float fbmL(vec3 p, float px){
-  float s = 0.0, a = 0.5;
-  for (int i = 0; i < 5; i++){
-    float k = 1.0 - smoothstep(0.35, 0.7, px);
-    s += a * (k > 0.0 ? mix(0.5, vnoise(p), k) : 0.5);
-    p = p*2.03 + 1.7; a *= 0.5; px *= 2.03;
-  }
-  return s;
-}
 `;
-const BUMP = /* glsl */`   // fragment-only (screen derivatives)
-// Bump from a scalar height using screen derivatives (one height eval per pixel, no tangents needed)
-vec3 bumpNormal(vec3 n, vec3 viewPos, float h, float scale){
-  vec3 dpdx = dFdx(-viewPos), dpdy = dFdy(-viewPos);
-  float dhx = dFdx(h) * scale, dhy = dFdy(h) * scale;
-  vec3 r1 = cross(dpdy, n), r2 = cross(n, dpdx);
-  float det = dot(dpdx, r1);
-  vec3 grad = sign(det) * (dhx * r1 + dhy * r2);
-  vec3 r = abs(det) * n - grad;
-  float l2 = dot(r, r);
-  return l2 > 1e-30 ? r * inversesqrt(l2) : n;   // normalize(0) = NaN, which bloom smears into black blocks
-}
-`; // trailing newline: three's '#define STANDARD' must not land on the '}' line (broke the rock shader)
-
-// ---------- Sky dome ----------
-scene.add(new THREE.Mesh(
-  new THREE.SphereGeometry(300, 32, 16),
-  new THREE.ShaderMaterial({
-    side: THREE.BackSide, depthWrite: false, fog: false,
-    uniforms: { horizon: { value: HORIZON }, zenith: { value: ZENITH } },
-    vertexShader: `varying vec3 vDir; void main(){ vDir = normalize(position);
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); gl_Position.z = gl_Position.w; }`,
-    fragmentShader: `uniform vec3 horizon, zenith; varying vec3 vDir;
-      void main(){
-        float t = smoothstep(-0.03, 0.55, vDir.y);
-        vec3 c = mix(horizon * 1.15, zenith, pow(t, 0.7));
-        c += horizon * 0.25 * exp(-abs(vDir.y) * 22.0);   // thin bright haze band on the horizon
-        gl_FragColor = vec4(c, 1.0);
-        #include <colorspace_fragment>
-      }`
-  })
-));
-
-// ---------- Lights (matched to the Blender setup) ----------
-scene.add(new THREE.HemisphereLight(0x9aa6bd, 0x05060a, 0.22));
-const fill = new THREE.DirectionalLight(0xb4c0dc, 0.3); fill.position.set(0, 6, 14); scene.add(fill);
-const rim = new THREE.DirectionalLight(0xdde5ff, 0.9); rim.position.set(0, 4, -30); scene.add(rim);
-// Moon key from below: bright lower crescent; upward-facing ground can't receive it
-const under = new THREE.DirectionalLight(0xf3f6ff, 7.5);
-under.position.set(-3, -14, -14); under.target.position.set(0, 5.8, -14);
-scene.add(under, under.target);
 
 const clock = new THREE.Clock();
 const uTime = { value: 0 };
-const pxPerM = { value: 1 };                    // point sprites are sized in metres: pixels per metre at 1 m
 
-// ---------- Material upgrades (injected into the glTF PBR materials) ----------
-// Moon surface: craters, seas and tone are a pure function of direction, so they are rendered ONCE into a cube map
-// (tone + the analytic crater slope) instead of every frame: identical look, a single texture fetch per pixel.
-const MOON_GLSL = /* glsl */`
-// sum of crater profiles: bowl inside, raised rim, soft ejecta outside
-float craters(vec3 p, float density){
-  vec3 i = floor(p), f = fract(p); float h = 0.0;
-  for (int x=-1;x<=1;x++) for (int y=-1;y<=1;y++) for (int z=-1;z<=1;z++){
-    vec3 g = vec3(x,y,z); vec3 o = hash33(i + g);
-    if (hash13(i + g + 17.0) > density) continue;
-    float r = mix(0.12, 0.48, o.z*o.z);
-    float d = length(g + o - f) / r;
-    float bowl = d < 1.0 ? (d*d - 1.0) * 0.55 : 0.0;
-    float rimH = 0.32 * exp(-(d-1.0)*(d-1.0)*16.0);
-    h += (bowl + rimH) * r;
+// ---------- Universe backdrop: the nebula HDRI as an equirectangular sky; it drifts with the pointer ----------
+// HDR_multi_nebulae_2.hdr (10000x5000, 92 MB) ships as nebula_hdr.jpg (8192x4096, ~4 MB): linear values were stored as
+// s = log2(1 + v/E) / L in 8 bits, which keeps ~13 stops (faint gas to the 18x-bright stars) within ~4% typical error.
+const SKY_LOG = { E: 0.0005, L: 15.2877 };       // must match the encoder (hdr2log.py: E = 0.0005, M = 20)
+const skyTex = new THREE.TextureLoader().load('nebula_hdr.jpg');
+// raw data (no sRGB decode); no mipmaps: the atan() seam would pick the smallest mip and draw a line
+Object.assign(skyTex, { colorSpace: THREE.NoColorSpace, generateMipmaps: false, minFilter: THREE.LinearFilter });
+const skyU = { uSky: { value: skyTex }, uSkyExp: { value: 6 }, uSkyRot: { value: new THREE.Matrix3() }, uPR: { value: 1 }, uRes: { value: new THREE.Vector2(1, 1) },
+  uTime, uPtr: { value: new THREE.Vector2(-1e4, -1e4) }, uGridRot: { value: new THREE.Matrix3() },
+  uMoonDir: { value: new THREE.Vector3(0, 0, -1) }, uMoonRad: { value: 0.1 }, uMoonGlow: { value: 1 },
+  uMet: { value: new THREE.Vector3() }, uMetDir: { value: new THREE.Vector2(1, 0) }, uMetT: { value: -1 } };
+// shooting stars: one every 7-16 s, 0.7 s across the upper part of the screen
+const meteor = { t0: 0, next: 6 };
+function meteorUpdate(t) {
+  if (t >= meteor.next) {
+    const w = innerWidth, h = innerHeight, a = THREE.MathUtils.degToRad(20 + Math.random() * 30);   // 20-50 deg below level
+    skyU.uMet.value.set(w * (0.15 + Math.random() * 0.7), h * (0.6 + Math.random() * 0.35), 220 + Math.random() * 180);
+    skyU.uMetDir.value.set(Math.cos(a) * (Math.random() < 0.5 ? 1 : -1), -Math.sin(a));   // left or right, always falling
+    meteor.t0 = t; meteor.next = t + 7 + Math.random() * 9;
   }
-  return h;
+  const k = (t - meteor.t0) / 0.7;
+  skyU.uMetT.value = k >= 0 && k <= 1 ? k : -1;
 }
-float moonHeight(vec3 p){
-  return craters(p*1.0, 0.55)*1.0 + craters(p*2.6+3.1, 0.7)/2.6 + craters(p*7.0+9.3, 0.8)/7.0
-       + (fbm(p*11.0)-0.5)*0.02;
-}
-`;
-// the sphere's tangent frame, shared by the bake and the material so the stored slope lines up exactly
-const MOON_FRAME = /* glsl */`vec3 moonT(vec3 n){ return normalize(cross(abs(n.y) > 0.99 ? vec3(1,0,0) : vec3(0,1,0), n)); }
-`;
-function bakeMoon(radius, size) {
-  const target = new THREE.WebGLCubeRenderTarget(size, { type: THREE.HalfFloatType, generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter });
-  const bake = new THREE.Scene();
-  const box = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), new THREE.ShaderMaterial({
-    side: THREE.BackSide, uniforms: { uR: { value: radius } },
-    vertexShader: `varying vec3 vDir; void main(){ vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-    fragmentShader: NOISE + MOON_GLSL + MOON_FRAME + /* glsl */`
-      uniform float uR; varying vec3 vDir;
+const ptrFast = new THREE.Vector2();              // grid spotlight: tracks the pointer more tightly than the parallax
+const sky = new THREE.Mesh(
+  new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3)),
+  new THREE.ShaderMaterial({
+    uniforms: skyU, depthTest: false, depthWrite: false,
+    vertexShader: /* glsl */`
+      varying vec3 vDir;
       void main(){
-        vec3 nO = normalize(vDir), p = nO * uR, tO = moonT(nO);
-        float mH = moonHeight(p);
-        const float e = 0.004;                                    // forward differences along the sphere tangents
-        float gx = (moonHeight(p + tO*e) - mH) / e, gy = (moonHeight(p + cross(nO, tO)*e) - mH) / e;
-        float maria = smoothstep(0.42, 0.62, fbm(p*0.55 + 4.0));                     // dark basalt seas
-        float tone = mix(0.74, 0.40, maria) * (0.85 + 0.3*fbm(p*6.0)) + clamp(mH, -0.1, 0.1)*0.8;
-        gl_FragColor = vec4(1.1 * gx, 1.1 * gy, tone, 1.0);
+        vec4 v = inverse(projectionMatrix) * vec4(position.xy, 1.0, 1.0);
+        vDir = transpose(mat3(viewMatrix)) * (v.xyz / v.w);              // view ray -> world direction
+        gl_Position = vec4(position.xy, 1.0, 1.0);
       }`,
-  }));
-  bake.add(box);
-  new THREE.CubeCamera(0.1, 10, target).update(renderer, bake);
-  box.geometry.dispose(); box.material.dispose();
-  return target.texture;
-}
+    fragmentShader: NOISE + /* glsl */`
+      uniform sampler2D uSky; uniform mat3 uSkyRot; uniform mat3 uGridRot; uniform float uPR, uTime, uSkyExp, uMoonRad, uMoonGlow, uMetT; uniform vec2 uRes, uPtr, uMetDir;
+      uniform vec3 uMoonDir, uMet; varying vec3 vDir;
+      void main(){
+        vec3 rd = uSkyRot * normalize(vDir);
+        vec2 uv = vec2(atan(rd.z, rd.x) * 0.15915494 + 0.5, asin(clamp(rd.y, -1.0, 1.0)) * 0.31830989 + 0.5);
+        // nebula_hdr.jpg is the HDRI log-encoded into 8 bits (see SKY_LOG): back to linear HDR, then exposed
+        vec3 col = (exp2(texture2D(uSky, uv).rgb * ${SKY_LOG.L.toFixed(4)}) - 1.0) * ${SKY_LOG.E} * uSkyExp;
+        // cap the brightest channel below the bloom threshold (hue kept): HDR star texels would otherwise bloom into squares
+        col *= min(1.0, 1.6 / max(max(col.r, col.g), max(col.b, 1e-4)));
+        // scintillation: only bright points (stars) flicker, each on its own noise cell (~1.5 px) and pace
+        float lum = max(col.r, max(col.g, col.b));
+        col *= 1.0 + smoothstep(0.12, 0.7, lum) * (vnoise(vec3(rd.xy * 900.0 + rd.z * 300.0, uTime * 2.5)) - 0.5) * 1.1;
+        // the moon lights the sky round it: a faint cool glow falling off outside its disc (under the moon itself)
+        vec3 vd = normalize(vDir);
+        float ang = acos(clamp(dot(vd, uMoonDir), -1.0, 1.0));
+        col += vec3(0.5, 0.56, 0.68) * 0.05 * exp(-max(ang - uMoonRad, 0.0) / 0.12) * uMoonGlow;
+        // shooting star: a short, fading streak (CSS px, y up); uMet = start xy, length; uMetT = 0..1 progress, <0 off
+        if (uMetT >= 0.0) {
+          vec2 rel = gl_FragCoord.xy / uPR - (uMet.xy + uMetDir * uMet.z * uMetT);
+          float along = dot(rel, -uMetDir), across = dot(rel, vec2(-uMetDir.y, uMetDir.x));
+          float m = step(0.0, along) * (1.0 - smoothstep(0.0, uMet.z * 0.45, along)) * exp(-across * across / 0.8);
+          col += vec3(0.85, 0.9, 1.0) * m * sin(3.14159 * uMetT) * 1.3;
+        }
+        // Grid on the celestial sphere, seen from inside it: longitude / latitude lines every 8 degrees (~216 CSS px
+        // at the centre) in the view ray's own direction, so it turns with the camera and the sky like a planetarium
+        // dome. uGridRot spins it with the sky's turn at half speed (a layer between the moon and the stars).
+        // Lines fade into the edges, the bottom and the poles, break up like etched glass, and catch the cursor light.
+        vec3 gd = uGridRot * normalize(vDir);
+        float lonA = atan(gd.z, gd.x), lonB = atan(-gd.z, -gd.x);      // B's +-PI seam is on the opposite side
+        float lat = asin(clamp(gd.y, -1.0, 1.0));
+        const float CELL = 0.13962634;                                  // 8 degrees: 45 cells round, so lon wraps cleanly
+        vec2 gc = vec2(lonA, lat) / CELL;
+        vec2 fw = vec2(min(fwidth(lonA), fwidth(lonB)), fwidth(lat)) / CELL;   // seam-safe screen derivative
+        vec2 f = abs(fract(gc + 0.5) - 0.5);
+        vec2 dpx = f / max(fw, 1e-5);                                   // device px to the nearest line on each axis
+        float line = 1.0 - smoothstep(0.35 * uPR, 0.35 * uPR + 1.0, min(dpx.x, dpx.y));
+        float node = 1.0 - smoothstep(0.0, 2.2 * uPR, length(dpx));     // crossings
+        vec2 q = gl_FragCoord.xy / uRes - 0.5; q.x *= uRes.x / uRes.y;
+        float fade = smoothstep(0.95, 0.1, length(q)) * smoothstep(0.08, 0.45, gl_FragCoord.y / uRes.y)
+                   * smoothstep(0.97, 0.8, abs(gd.y));                  // longitudes bunch up at the poles
+        float wear = 0.45 + 0.55 * vnoise(gd * 7.0 + vec3(0.0, 0.0, uTime * 0.04));
+        float spot = exp(-pow(length(gl_FragCoord.xy - uPtr) / (240.0 * uPR), 2.0));
+        float g = (line * wear + node * 0.9) * (0.55 * fade + 1.4 * spot);
+        vec3 tint = mix(vec3(0.5, 0.58, 0.72), min(col, 1.0) * 4.0 + 0.3, 0.25);   // borrows a little of the nebula behind it
+        col += tint * g * 0.05;
+        gl_FragColor = vec4(col, 0.0);   // alpha 0: the grade keeps the nebula's colour
+      }`,
+  })
+);
+sky.frustumCulled = false; sky.renderOrder = -1;
+scene.add(sky);
 
-function moonMaterial(m, geometry) {
-  m.map = null; m.normalMap = null;            // replaced by the baked craters below
-  m.color.setScalar(1); m.roughness = 1; m.metalness = 0;
-  m.emissive = new THREE.Color(0x111318);       // earthshine so the upper face isn't muddy
-  geometry.computeBoundingSphere();
-  const moonMap = bakeMoon(geometry.boundingSphere.radius, Q.moon);
-  m.onBeforeCompile = (s) => {
-    s.uniforms.moonMap = { value: moonMap };
-    // view-space tangent frame of the sphere: the baked slope turns into a normal with no 2x2-pixel blocks
-    s.vertexShader = 'varying vec3 vObj, vNv, vTv, vBv;\n' + MOON_FRAME + s.vertexShader.replace('#include <begin_vertex>', `#include <begin_vertex>
-      vObj = position; vec3 nO = normalize(position), tO = moonT(nO);
-      vNv = normalize(normalMatrix * nO); vTv = normalize(normalMatrix * tO); vBv = normalize(normalMatrix * cross(nO, tO));`);
-    s.fragmentShader = 'varying vec3 vObj, vNv, vTv, vBv;\nuniform samplerCube moonMap;\n' + s.fragmentShader
-      .replace('#include <color_fragment>', /* glsl */`#include <color_fragment>
-        vec4 mb = textureCube(moonMap, vObj);                     // r,g: crater slope  b: tone
-        diffuseColor.rgb = vec3(mb.b) * vec3(0.98, 0.99, 1.02);`)
-      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
-        normal = normalize(vNv - (mb.r * vTv + mb.g * vBv));`);
-  };
+// ---------- Space dust: specks drifting through the volume between the camera and the moon ----------
+// Positions wrap inside a box in the vertex shader, so the drift loops forever with no CPU work.
+const DUST = { n: mobile ? 700 : 1600, box: new THREE.Vector3(30, 18, 34), lo: new THREE.Vector3(-15, -5, -20) };
+const dustGeo = new THREE.BufferGeometry();
+const dp = new Float32Array(DUST.n * 3), dr = new Float32Array(DUST.n);
+for (let i = 0; i < DUST.n; i++) {
+  dp[i * 3] = Math.random() * DUST.box.x; dp[i * 3 + 1] = Math.random() * DUST.box.y; dp[i * 3 + 2] = Math.random() * DUST.box.z;
+  dr[i] = Math.random();
 }
-
-function rockMaterial(m) {
-  m.color.setScalar(1); m.metalness = 0; m.roughness = 1;          // albedo/roughness come from the shader below
-  m.normalScale.setScalar(1.3);
-  m.onBeforeCompile = (s) => {
-    s.vertexShader = 'varying vec3 vW;\n' + s.vertexShader.replace('#include <begin_vertex>',
-      '#include <begin_vertex>\nvW = transformed;');   // object space: the pattern rides with the floating stone
-    s.fragmentShader = 'varying vec3 vW;\n' + NOISE + BUMP + s.fragmentShader
-      .replace('#include <color_fragment>', /* glsl */`#include <color_fragment>
-        vec3 rp = vW;
-        float fw = length(fwidth(vW));                                    // object-space metres per pixel
-        float streak = fbmL(rp*vec3(9.0, 0.6, 9.0), fw*9.0);              // vertical weathering streaks
-        float weather = fbmL(rp*1.3 + 7.0, fw*1.3);
-        float alb = mix(0.012, 0.034,smoothstep(0.3, 0.75, weather*0.6 + streak*0.5));
-        alb *= 0.8 + 0.4*fbmL(rp*18.0, fw*18.0);                         // grainy basalt
-        diffuseColor.rgb = vec3(alb) * vec3(0.95, 0.97, 1.03);`)
-      .replace('#include <roughnessmap_fragment>', /* glsl */`#include <roughnessmap_fragment>
-        float damp = smoothstep(0.62, 0.72, fbmL(vW*vec3(3.0, 0.8, 3.0) + 2.0, fw*3.0));   // a few damp seams only
-        roughnessFactor = mix(0.82, 0.35, damp) - 0.15*fbmL(vW*25.0, fw*25.0);
-        float sparkle = step(0.992, hash13(floor(vW*160.0)));            // sparse mica flecks
-        roughnessFactor = mix(roughnessFactor, 0.12, sparkle);`)
-      .replace('#include <normal_fragment_maps>', /* glsl */`#include <normal_fragment_maps>
-        float ridge = 1.0 - abs(fbmL(vW*vec3(3.5, 1.2, 3.5), fw*3.5)*2.0 - 1.0);   // chipped, conchoidal facets
-        float rh = fbmL(vW*vec3(2.5, 0.7, 2.5), fw*2.5)*0.10 + ridge*ridge*0.05
-                 + fbmL(vW*vec3(14.0, 4.0, 14.0), fw*14.0)*0.02 + abs(fbmL(vW*36.0, fw*36.0)-0.5)*0.006;
-        normal = bumpNormal(normal, vViewPosition, rh, 1.0);`);
-  };
-}
-
-function groundMaterial(m) {
-  m.color.setRGB(0.012, 0.014, 0.018); m.roughness = 1; m.metalness = 0;
-}
-
-// ---------- Pond: planar reflection with animated ripples + fresnel ----------
-const WaterShader = {
-  name: 'PondWater',
-  uniforms: { color: { value: null }, tDiffuse: { value: null }, textureMatrix: { value: null }, uTime,
-              uSplash: { value: new THREE.Vector4(0, 0, -100, 0) } },   // xz centre, start time, strength
+dustGeo.setAttribute('position', new THREE.BufferAttribute(dp, 3));
+dustGeo.setAttribute('seed', new THREE.BufferAttribute(dr, 1));
+const dust = new THREE.Points(dustGeo, new THREE.ShaderMaterial({
+  uniforms: { uTime, uPR: skyU.uPR, uBox: { value: DUST.box }, uLo: { value: DUST.lo }, uShift: { value: new THREE.Vector3() } },
+  transparent: true, depthWrite: false,
+  // adds light but leaves alpha alone: alpha 0 is the grade's "keep colour" mark
+  blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneFactor,
+  blendSrcAlpha: THREE.ZeroFactor, blendDstAlpha: THREE.OneFactor,
   vertexShader: /* glsl */`
-    uniform mat4 textureMatrix; varying vec4 vUv; varying vec3 vW;
-    void main(){ vUv = textureMatrix * vec4(position, 1.0); vW = (modelMatrix * vec4(position, 1.0)).xyz;
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-  fragmentShader: NOISE + /* glsl */`
-    uniform vec3 color; uniform sampler2D tDiffuse; uniform float uTime; uniform vec4 uSplash; varying vec4 vUv; varying vec3 vW;
-    // a watch breaking the surface: rings rolling out from an elongated source (the watch is wide on x), slope only
-    vec2 splash(vec2 p){
-      float age = uTime - uSplash.z;
-      if (age < 0.0 || age > 10.0) return vec2(0.0);
-      vec2 d = (p - uSplash.xy) * vec2(0.6, 1.0);
-      float r = length(d) + 1e-3;
-      vec2 g = vec2(0.0);
-      for (int i = 0; i < 3; i++){                              // three wave trains: the break, the strap, the settle
-        float a = age - float(i) * 0.55; if (a < 0.0) continue;
-        float front = r - a * (1.05 + 0.25 * float(i));
-        float env = exp(-front * front * 0.9) * exp(-a * 0.5) / (1.0 + r * 1.2);
-        g += (d / r) * vec2(0.6, 1.0) * cos(front * (11.0 - 2.5 * float(i))) * env * (0.36 - 0.09 * float(i));
-      }
-      // the swirl the watch spins out of: three spiral arms winding round the centre, fading as it settles
-      float ang = atan(d.y, d.x);
-      float vort = exp(-r * 1.1) * smoothstep(0.0, 0.3, age) * exp(-age * 0.55);
-      g += vec2(-d.y, d.x) / r * cos(ang * 3.0 + r * 7.0 - age * 5.0) * vort * 0.3;
-      return g * uSplash.w;
-    }
-    vec2 waves(vec2 p, float t){
-      vec2 g = vec2(0.0);
-      // analytic slopes of a few gerstner-ish directional waves
-      const vec4 W[5] = vec4[5](vec4(1.0,0.15,9.0,0.010), vec4(0.8,-0.6,13.0,0.006), vec4(-0.3,1.0,17.0,0.004),
-                                vec4(0.95,0.3,27.0,0.0025), vec4(-0.7,-0.7,35.0,0.0018));
-      for (int i = 0; i < 5; i++){ vec2 d = normalize(W[i].xy); float k = W[i].z;
-        g += d * k * W[i].w * cos(dot(p, d)*k + t*sqrt(k)*1.3); }
-      // slow irregular swell
-      float e = 0.05, n0 = vnoise(vec3(p*2.2, t*0.25));
-      g += vec2(vnoise(vec3((p+vec2(e,0))*2.2, t*0.25)) - n0, vnoise(vec3((p+vec2(0,e))*2.2, t*0.25)) - n0) / e * 0.02;
-      return g;
-    }
+    uniform float uTime, uPR; uniform vec3 uBox, uLo, uShift; attribute float seed; varying float vA;
     void main(){
-      vec2 sg = splash(vW.xz);
-      vec2 g = waves(vW.xz, uTime) + sg;
-      vec3 N = normalize(vec3(-g.x, 1.0, -g.y));
-      vec3 V = normalize(cameraPosition - vW);
-      vec4 uv = vUv; uv.xy += N.xz * vec2(0.9, 0.5) * 0.06 * uv.w;   // horizontal streaking like the reference
-      vec3 refl = texture2DProj(tDiffuse, uv).rgb;
-      float fres = 0.02 + 0.98 * pow(1.0 - max(dot(V, N), 0.0), 5.0);
-      vec3 deep = vec3(0.002, 0.0025, 0.0035);
-      vec3 col = mix(deep, refl * color, clamp(0.62 + fres, 0.0, 1.0));
-      // subtle specular glints from the bright sky
-      col += vec3(0.6,0.65,0.75) * pow(max(dot(reflect(-V, N), normalize(vec3(0.0, 0.25, -1.0))), 0.0), 220.0) * 0.6;
-      col += vec3(0.55,0.6,0.7) * smoothstep(0.08, 0.3, length(sg)) * 0.12;   // silver crest highlights on the rings
-      gl_FragColor = vec4(col, 1.0);
-      #include <tonemapping_fragment>
-      #include <colorspace_fragment>
-    }`
-};
-
-// ---------- GPU grass ----------
-function bladeGeometry(segs) {
-  const pos = [], idx = [];
-  for (let s = 0; s < segs; s++) { const t = s / segs; pos.push(-0.5, t, 0, 0.5, t, 0); }
-  pos.push(0, 1, 0);
-  for (let s = 0; s < segs - 1; s++) { const a = s * 2; idx.push(a, a + 1, a + 2, a + 2, a + 1, a + 3); }
-  const a = (segs - 1) * 2; idx.push(a, a + 1, a + 2);
-  const g = new THREE.InstancedBufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx);
-  return g;
-}
-
-const grassMaterial = new THREE.ShaderMaterial({
-  side: THREE.DoubleSide,
-  uniforms: {
-    uTime, uRoot: { value: new THREE.Color(0.006, 0.007, 0.009) }, uTip: { value: new THREE.Color(0.11, 0.12, 0.135) },
-    uFogColor: { value: HORIZON }, uFogNear: { value: FOG.near }, uFogFar: { value: FOG.far },
-    uKeyDir: { value: new THREE.Vector3(0, 6, 14).normalize() }, uBackDir: { value: new THREE.Vector3(0, 0.22, -1).normalize() },
-    uDensity: { value: 1 },
-  },
-  vertexShader: /* glsl */`
-    attribute vec4 aOffset;   // xyz root, w random
-    attribute vec4 aParams;   // yaw, height, width, lean
-    uniform float uTime, uDensity;
-    float grassKeep(float d){ return clamp(1.3 - d / 30.0, 0.35, 1.0); }   // must match grassKeep() in JS
-    varying float vT, vRand, vDist, vGust; varying vec3 vN, vW;
-    void main(){
-      float t = position.y;
-      float c = cos(aParams.x), s = sin(aParams.x);
-      vec3 side = vec3(c, 0.0, s), fwd = vec3(-s, 0.0, c);
-      // gust fronts rolling across the field along the wind direction, plus per-blade flutter
-      const vec2 WD = vec2(0.93, 0.36);
-      float ph = dot(aOffset.xz, WD) * 0.55 - uTime * 1.7 + sin(dot(aOffset.xz, vec2(-WD.y, WD.x)) * 0.35) * 1.4;
-      float gust = 0.5 + 0.5 * sin(ph); gust *= gust;
-      float wind = 0.15 + gust * 0.95 + sin(uTime * 7.0 + aOffset.w * 6.28 + aOffset.x * 2.0) * 0.1;
-      vGust = gust;
-      float dist = distance(cameraPosition, aOffset.xyz);
-      // widen far blades (less shimmer) and by 1/sqrt(kept fraction), so thinned distant grass covers the same ground
-      float w = aParams.z * (1.0 + dist * 0.035) * inversesqrt(grassKeep(dist) * uDensity);
-      vec3 bend = (fwd * aParams.w + vec3(WD.x, 0.0, WD.y) * wind) * t * t * aParams.y;
-      vec3 p = side * position.x * w * (1.0 - t * 0.6) + vec3(0.0, t * aParams.y, 0.0) + bend;
-      p.y -= length(bend) * 0.45 * t;              // keep length roughly constant as it bends
-      vW = aOffset.xyz + p;
-      vN = normalize(fwd + vec3(0.0, 0.8, 0.0) + side * position.x * 0.8);
-      vT = t; vRand = aOffset.w; vDist = dist;
-      gl_Position = projectionMatrix * viewMatrix * vec4(vW, 1.0);
+      // slow drift, mostly sideways and toward the camera, each speck at its own pace with a gentle sway
+      vec3 vel = vec3(0.18, 0.05, 0.35) * (0.4 + seed);
+      vec3 p = position + uShift + vel * uTime + 0.25 * vec3(sin(uTime * 0.3 + seed * 40.0), cos(uTime * 0.23 + seed * 70.0), 0.0);
+      p = uLo + mod(p, uBox);
+      vec4 mv = modelViewMatrix * vec4(p, 1.0);
+      float z = -mv.z;
+      gl_PointSize = clamp((0.9 + 2.2 * seed * seed) * uPR * 14.0 / z, 0.6 * uPR, 6.0 * uPR);
+      // fade in from the far end of the box, out right in front of the lens; twinkle
+      vA = smoothstep(0.5, 3.0, z) * (1.0 - smoothstep(22.0, 32.0, z)) * (0.55 + 0.45 * sin(uTime * (0.6 + seed * 1.7) + seed * 90.0));
+      gl_Position = projectionMatrix * mv;
     }`,
   fragmentShader: /* glsl */`
-    uniform vec3 uRoot, uTip, uFogColor, uKeyDir, uBackDir; uniform float uFogNear, uFogFar;
-    varying float vT, vRand, vDist, vGust; varying vec3 vN, vW;
+    varying float vA;
     void main(){
-      vec3 N = normalize(vN) * (gl_FrontFacing ? 1.0 : -1.0);
-      vec3 V = normalize(cameraPosition - vW);
-      vec3 base = mix(uRoot, uTip, pow(vT, 1.4)) * (0.7 + 0.6 * vRand);
-      float ao = mix(0.18, 1.0, smoothstep(0.0, 0.7, vT));
-      float sky = 0.5 + 0.5 * N.y;
-      float key = max(dot(N, uKeyDir), 0.0);
-      float back = pow(max(dot(-V, uBackDir), 0.0), 4.0) * vT * vT;      // silver sheen toward the horizon
-      vec3 col = base * ao * (0.55 * sky + 0.5 * key) + vec3(0.42, 0.46, 0.55) * back * 0.32;
-      col += pow(max(dot(N, normalize(uKeyDir + V)), 0.0), 48.0) * 0.035 * vT;
-      col += vec3(0.42, 0.46, 0.55) * vGust * vT * vT * 0.05;           // flattened blades catch light: gusts read from afar
-      col = mix(col, uFogColor, smoothstep(uFogNear, uFogFar, vDist));
-      gl_FragColor = vec4(col, 1.0);
-      #include <tonemapping_fragment>
-      #include <colorspace_fragment>
-    }`
-});
+      float r = length(gl_PointCoord - 0.5) * 2.0;                     // soft round speck
+      float a = (1.0 - smoothstep(0.0, 1.0, r)) * vA;
+      gl_FragColor = vec4(vec3(1.0, 0.97, 0.92) * a * 0.55, 0.0);
+    }`,
+}));
+dust.frustumCulled = false;                       // the box moves in the shader; the CPU bounds would be stale
+scene.add(dust);
 
-const grassKeep = (d) => THREE.MathUtils.clamp(1.3 - d / 30, 0.35, 1);   // must match grassKeep() in the shader
-function mulberry32(a) { return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a);
-  t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+// ---------- Lights (matched to the Blender setup) ----------
+const hemi = new THREE.HemisphereLight(0x9aa6bd, 0x05060a, 0.22); scene.add(hemi);
+const fill = new THREE.DirectionalLight(0xb4c0dc, 0.3); fill.position.set(0, 6, 14); scene.add(fill);
+const rim = new THREE.DirectionalLight(0xdde5ff, 0.9); rim.position.set(0, 4, -30); scene.add(rim);
+// Moon key from below: bright lower crescent for the intro moon
+const under = new THREE.DirectionalLight(0xf3f6ff, 7.5);
+under.position.set(-3, -14, -14); under.target.position.set(0, 5.8, -14);
+scene.add(under, under.target);
+// Experience: key light from below-left and behind the moon (position in LIGHT.sunPos): a lit crescent edge
+const sun = new THREE.DirectionalLight(0xffffff, 0);
+sun.target = under.target;
+sun.position.set(-34.4, -60, -60);
+scene.add(sun);
+const moonRim = { dir: { value: new THREE.Vector3() }, k: { value: 0 } };   // view-space light direction, limb glow strength
+// Every lighting value in one place: [intro, watch view]; the loop blends them as the camera enters.
+// ?debug opens a live panel over this object (see the bottom of the script).
+const LIGHT = {
+  sun: [0, 5.94], under: [7.5, 0], hemi: [0.22, 0.09], fill: [0.3, 0.09], rim: [0.9, 0.53], limb: [0, 0.31], earthshine: [1, 0.55],
+  sunPos: { x: -34.4, y: -60, z: -60 }, sunColor: '#ffffff', underColor: '#f3f6ff',
+};
 
-function buildGrass(buf) {
-  // terrain.bin from Blender: [N, size, minH, maxH, originX, originY] f32, then N*N u16 heights, then N*N u8 grass mask
-  const [N, size, hMin, hMax, ox, oy] = new Float32Array(buf, 0, 6);
-  const hs = new Uint16Array(buf, 24, N * N), mk = new Uint8Array(buf, 24 + N * N * 2, N * N);
-  const sample = (arr, bx, by) => {
-    const fx = THREE.MathUtils.clamp(((bx - ox) / size + 0.5) * (N - 1), 0, N - 1.001);
-    const fy = THREE.MathUtils.clamp(((by - oy) / size + 0.5) * (N - 1), 0, N - 1.001);
-    const i = fx | 0, j = fy | 0, u = fx - i, v = fy - j, k = j * N + i;
-    return (arr[k] * (1 - u) + arr[k + 1] * u) * (1 - v) + (arr[k + N] * (1 - u) + arr[k + N + 1] * u) * v;
+// ---------- Material upgrades (injected into the glTF PBR materials) ----------
+// Moon surface: NASA's colour and elevation maps (loaded below), plus a lit-side limb glow and the watch-view grade
+function moonMaterial(m) {
+  m.roughness = 1; m.metalness = 0;
+  m.emissive = new THREE.Color(0x2c3442);       // earthshine: faint cool light bounced off Earth (x emissiveMap)
+  m.onBeforeCompile = (s) => {
+    s.uniforms.uRimDir = moonRim.dir; s.uniforms.uRim = moonRim.k;
+    s.fragmentShader = 'uniform vec3 uRimDir;\nuniform float uRim;\n' + s.fragmentShader
+      .replace('#include <emissivemap_fragment>', /* glsl */`#include <emissivemap_fragment>
+        // glowing limb on the lit side only: fresnel, masked toward the light; bloom spreads it
+        float fr = pow(1.0 - clamp(dot(normal, normalize(vViewPosition)), 0.0, 1.0), 3.0);
+        totalEmissiveRadiance += vec3(0.85, 0.9, 1.0) * fr * smoothstep(-0.1, 0.7, dot(normal, uRimDir)) * uRim;`);
   };
-  const height = (bx, by) => hMin + sample(hs, bx, by) / 65535 * (hMax - hMin);
-
-  const X0 = -18, X1 = 18, Y0 = -15, Y1 = 18, CH = 6;            // Blender XY area, chunk size (m)
-  const cx = Math.ceil((X1 - X0) / CH), cy = Math.ceil((Y1 - Y0) / CH);
-  const chunks = Array.from({ length: cx * cy }, () => ({ off: [], par: [] }));
-  const rnd = mulberry32(1337);
-  const geo = bladeGeometry(Q.segs);
-  for (let n = 0; n < Q.blades * 1.4; n++) {
-    const bx = X0 + rnd() * (X1 - X0), by = Y0 + rnd() * (Y1 - Y0);
-    const m = sample(mk, bx, by) / 255;
-    if (rnd() > m) continue;                                       // pond and shore stay clear
-    const h = height(bx, by);
-    const patch = 0.5 + 0.5 * Math.sin(bx * 0.9 + Math.sin(by * 0.7) * 2) * Math.cos(by * 0.6);
-    const c = chunks[Math.floor((by - Y0) / CH) * cx + Math.floor((bx - X0) / CH)];
-    c.off.push(bx, h - 0.03, -by, rnd());                           // Blender (x,y,z) -> three (x,z,-y)
-    c.par.push(rnd() * Math.PI * 2, (0.07 + 0.13 * rnd() * rnd() + 0.06 * patch) * (0.4 + 0.6 * m),
-               0.022 + 0.014 * rnd(), 0.15 + 0.35 * rnd());
-  }
-  const group = new THREE.Group();
-  for (const c of chunks) {
-    if (!c.off.length) continue;
-    const g = geo.clone();
-    g.setAttribute('aOffset', new THREE.InstancedBufferAttribute(new Float32Array(c.off), 4));
-    g.setAttribute('aParams', new THREE.InstancedBufferAttribute(new Float32Array(c.par), 4));
-    g.instanceCount = c.off.length / 4;
-    const box = new THREE.Box3();
-    for (let i = 0; i < c.off.length; i += 4) box.expandByPoint(new THREE.Vector3(c.off[i], c.off[i + 1], c.off[i + 2]));
-    box.max.y += 0.4; g.boundingSphere = box.getBoundingSphere(new THREE.Sphere()); g.boundingBox = box;
-    const mesh = new THREE.Mesh(g, grassMaterial);                 // per-chunk frustum culling
-    mesh.userData.total = g.instanceCount;                          // blades are in random order: any prefix is an even subset
-    mesh.layers.set(GRASS_LAYER);
-    group.add(mesh);
-  }
-  group.userData = { height, mask: (bx, by) => sample(mk, bx, by) / 255 };
-  return group;
 }
 
 // ---------- Post: MSAA HDR -> bloom -> tonemap -> film grade ----------
@@ -516,9 +335,9 @@ composer.addPass(new ShaderPass({
     void main(){ vec4 c = texture2D(tDiffuse, vUv);
       gl_FragColor = (any(isnan(c)) || any(isinf(c))) ? vec4(0.0, 0.0, 0.0, 1.0) : clamp(c, 0.0, 64.0); }`
 }));
-const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.35, 0.7, 0.9);
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 2, 0.73, 2);
 // bloom adds colour only: its default additive blend also raises alpha everywhere, which would erase the
-// alpha-0 "keep colour" marks that the glowing flowers and motes leave for the grade
+// alpha-0 "keep colour" marks that the nebula sky leaves for the grade
 Object.assign(bloom.blendMaterial, { blending: THREE.CustomBlending, blendSrc: THREE.SrcAlphaFactor, blendDst: THREE.OneFactor,
   blendSrcAlpha: THREE.ZeroFactor, blendDstAlpha: THREE.OneFactor });
 composer.addPass(bloom);
@@ -539,7 +358,7 @@ const grade = new ShaderPass({
       float vig = smoothstep(0.95, 0.25, length((vUv - 0.5) * vec2(uRes.x/uRes.y, 1.0)) * 0.9);
       c *= mix(0.5, 1.0, vig);
       float g = h12(vUv * uRes + fract(uTime * 7.31) * 517.0) - 0.5;
-      c += g * mix(0.06, 0.03, l);                                           // film grain, stronger in shadows
+      c += g * mix(0.06, 0.03, l);                                          // film grain, stronger in shadows (the watch is drawn after, grain-free)
       gl_FragColor = vec4(c, 1.0);
     }`
 });
@@ -551,6 +370,7 @@ function resize() {
   renderer.setPixelRatio(pixelRatio); renderer.setSize(innerWidth, innerHeight);
   composer.setPixelRatio(pixelRatio); composer.setSize(innerWidth, innerHeight);
   grade.uniforms.uRes.value.set(innerWidth * pixelRatio, innerHeight * pixelRatio);
+  skyU.uRes.value.copy(grade.uniforms.uRes.value); skyU.uPR.value = pixelRatio;
   fitFov();
 }
 addEventListener('resize', resize);
@@ -559,134 +379,37 @@ resize();
 // ---------- Load ----------
 const draco = new DRACOLoader().setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/libs/draco/gltf/');
 const gltfLoader = new GLTFLoader().setDRACOLoader(draco);
-const [gltf, stonesGltf, flowerGltf, terrainBuf] = await Promise.all([
-  gltfLoader.loadAsync('moon_pond_web.glb'),
-  gltfLoader.loadAsync('stones.glb'),        // shoreline boulders and pebbles, placed in Blender along the real waterline
-  gltfLoader.loadAsync('flower.glb'),        // one glowing flower (stem + bloom), instanced through the grass
-  fetch('terrain.bin').then(r => { if (!r.ok) throw new Error('terrain.bin ' + r.status); return r.arrayBuffer(); }),
+const texLoader = new THREE.TextureLoader();
+const [gltf, moonColor, moonHeight] = await Promise.all([
+  gltfLoader.loadAsync('moon_pond_web.glb'), texLoader.loadAsync('moon_color_4k.jpg'), texLoader.loadAsync('moon_height.jpg'),
 ]).catch((e) => {
   document.getElementById('loading').textContent = 'LOAD FAILED: serve this folder over http (not file://)';
   throw e;
 });
 
+// Only the moon is kept from the Blender scene: pillars, terrain and pond are all left out (open space round the moon)
 const root = gltf.scene;
-let moon = null;
-root.traverse((o) => {
-  if (!o.isMesh) return;
-  if (o.name.startsWith('Moon')) { moonMaterial(o.material, o.geometry); moon = o; o.scale.multiplyScalar(1.18); }   // a little larger than the Blender export
-  else if (o.name.startsWith('Terrain')) groundMaterial(o.material);
-});
-// the hanging monolith pillars are left out of this design (open sky round the moon)
-for (const o of root.children.filter((c) => c.name.startsWith('Monolith'))) { o.removeFromParent(); o.geometry.dispose(); o.material.dispose(); }
-scene.add(root);
-stonesGltf.scene.traverse((o) => { if (o.isMesh) rockMaterial(o.material); });   // wet basalt shoreline
-scene.add(stonesGltf.scene);
-
-const water = root.getObjectByName('Pond_Water_web');
-water.updateWorldMatrix(true, false);
-const wsize = new THREE.Box3().setFromObject(water).getSize(new THREE.Vector3());
-const mirror = new Reflector(new THREE.PlaneGeometry(wsize.x, wsize.z), {
-  shader: WaterShader, color: 0xb8bcc6, clipBias: 0.002, multisample: 0,   // edges are smeared by ripples: MSAA is invisible here
-  textureWidth: Math.round(innerWidth * pixelRatio * Q.reflScale),
-  textureHeight: Math.round(innerHeight * pixelRatio * Q.reflScale),
-});
-mirror.material.uniforms.uTime = uTime;   // Reflector clones uniforms; re-share the clock
-const uSplash = mirror.material.uniforms.uSplash;
-mirror.rotation.x = -Math.PI / 2;
-mirror.position.setFromMatrixPosition(water.matrixWorld);
-water.visible = false;
-scene.add(mirror);
-
-const grass = buildGrass(terrainBuf);
-scene.add(grass);
-
-// ---------- Glowing flowers (flower.glb, made in Blender) spread evenly through the grass; motes lift off the blooms ----------
-{
-  const { height, mask } = grass.userData, rnd = mulberry32(99);
-  const flowers = [];                                                // Blender coords + yaw, scale, gold?
-  const CELL = Q.flowerCell;
-  for (let by = -16; by < 9.5; by += CELL) for (let bx = -16; bx < 16; bx += CELL) {
-    const x = bx + rnd() * CELL * 0.8, y = by + rnd() * CELL * 0.8;   // jittered grid: even, never in rows
-    if (mask(x, y) < 0.8 || y < -9.5) continue;                       // in the grass only, none right under the camera
-    flowers.push([x, y, rnd() * Math.PI * 2, 0.8 + rnd() * 0.5, rnd() < 0.55]);
-  }
-  const geo = {};
-  flowerGltf.scene.updateMatrixWorld(true);
-  flowerGltf.scene.traverse((o) => { if (o.isMesh) geo[o.name] = o.geometry.clone().applyMatrix4(o.matrixWorld); });
-  geo.FlowerBloom.computeBoundingBox();
-  const headLocal = geo.FlowerBloom.boundingBox.getCenter(new THREE.Vector3());
-  // the same world-space breeze as the grass, stronger toward the top of the plant
-  const swayChunk = /* glsl */`
-    vec4 mvPosition = instanceMatrix * vec4(transformed, 1.0);
-    vec2 ip = instanceMatrix[3].xz;
-    float k = position.y / 0.45;
-    mvPosition.xz += vec2(0.93, 0.36) * (0.025 + 0.035 * sin(uTime * 1.4 + dot(ip, vec2(0.51, 0.2)))) * k * k;
-    mvPosition = modelViewMatrix * mvPosition;
-    gl_Position = projectionMatrix * mvPosition;`;
-  const withSway = (m, extraVertex = '') => {
-    m.onBeforeCompile = (sh) => {
-      sh.uniforms.uTime = uTime;
-      sh.vertexShader = 'uniform float uTime;\n' + extraVertex + sh.vertexShader.replace('#include <project_vertex>', swayChunk);
-    };
-    return m;
-  };
-  const stemMat = withSway(new THREE.MeshStandardMaterial({ color: new THREE.Color(0.02, 0.026, 0.03), roughness: 0.8 }));
-  const bloomMat = withSway(new THREE.MeshStandardMaterial({ color: 0x9a9a9a, roughness: 0.5 }), 'varying float vGlow;\n');
-  const prev = bloomMat.onBeforeCompile;
-  bloomMat.onBeforeCompile = (sh) => {
-    prev(sh);
-    sh.vertexShader = sh.vertexShader.replace('#include <begin_vertex>',
-      '#include <begin_vertex>\nvGlow = 1.15 * (0.6 + 0.4 * sin(uTime * 1.1 + dot(instanceMatrix[3].xz, vec2(1.7, 2.3))));');
-    sh.fragmentShader = 'varying float vGlow;\n' + sh.fragmentShader
-      .replace('#include <emissivemap_fragment>', 'totalEmissiveRadiance = vColor * vGlow;')        // glow in the flower's own colour
-      .replace('#include <dithering_fragment>', '#include <dithering_fragment>\ngl_FragColor.a = 0.0;');   // alpha 0: grade keeps the gold
-  };
-  const stems = new THREE.InstancedMesh(geo.FlowerStem, stemMat, flowers.length);
-  const blooms = new THREE.InstancedMesh(geo.FlowerBloom, bloomMat, flowers.length);
-  const GOLD = new THREE.Color(1.0, 0.52, 0.12), WHITE = new THREE.Color(0.85, 0.9, 1.0);   // kept below AgX's bleach-to-white range
-  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), v = new THREE.Vector3(), sc3 = new THREE.Vector3();
-  const heads = [], gold = [];
-  flowers.forEach(([x, y, yaw, s, g], i) => {
-    m4.compose(v.set(x, height(x, y) - 0.02, -y), q.setFromAxisAngle(sc3.set(0, 1, 0), yaw), sc3.setScalar(s));
-    stems.setMatrixAt(i, m4); blooms.setMatrixAt(i, m4); blooms.setColorAt(i, g ? GOLD : WHITE);
-    heads.push(headLocal.clone().applyMatrix4(m4)); gold.push(g);
-  });
-  for (const m of [stems, blooms]) { m.computeBoundingSphere(); scene.add(m); }
-
-  // motes: a few per flower, born at its bloom, rising and drifting into the sky, in the flower's colour
-  const PER = Q.motes, pos = [], seed = [];
-  heads.forEach((h, i) => { for (let k = 0; k < PER; k++) { pos.push(h.x, h.y, h.z); seed.push(rnd(), rnd(), rnd(), gold[i] ? 0 : 1); } });
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  g.setAttribute('aSeed', new THREE.Float32BufferAttribute(seed, 4));
-  const motes = new THREE.Points(g, new THREE.ShaderMaterial({
-    transparent: true, depthWrite: false,
-    // colour: additive glow; alpha: scaled by (1 - a), which tells the grade to leave these pixels in colour
-    blending: THREE.CustomBlending, blendSrc: THREE.SrcAlphaFactor, blendDst: THREE.OneFactor,
-    blendSrcAlpha: THREE.ZeroFactor, blendDstAlpha: THREE.OneMinusSrcAlphaFactor,
-    uniforms: { uTime, pxPerM },
-    vertexShader: /* glsl */`
-      attribute vec4 aSeed; uniform float uTime, pxPerM; varying vec3 vC; varying float vA;
-      void main(){
-        float period = 9.0 + 7.0 * aSeed.y;
-        float life = fract(uTime / period + aSeed.x);
-        float sway = uTime * (0.3 + 0.25 * aSeed.z) + aSeed.x * 40.0;
-        float lift = life * life * 0.5 + life * 0.5;                    // eases out of the bloom, then climbs
-        vec3 p = position + vec3(sin(sway) * 0.45 * life + life * 1.4, lift * (4.0 + 6.0 * aSeed.z), cos(sway * 0.8) * 0.35 * life - life * 0.5);
-        vec4 mv = modelViewMatrix * vec4(p, 1.0);
-        gl_Position = projectionMatrix * mv;
-        float twinkle = 0.7 + 0.3 * sin(uTime * (2.0 + 3.0 * aSeed.y) + aSeed.z * 60.0);
-        vA = smoothstep(0.0, 0.06, life) * (1.0 - smoothstep(0.45, 1.0, life)) * twinkle;
-        vC = aSeed.w < 0.5 ? vec3(1.0, 0.52, 0.12) * 1.4 : vec3(0.92, 0.95, 1.0) * 1.5;
-        gl_PointSize = clamp(0.08 * pxPerM * (0.5 + aSeed.y) / -mv.z, 1.5, 24.0);
-      }`,
-    fragmentShader: `varying vec3 vC; varying float vA;
-      void main(){ float d = length(gl_PointCoord - 0.5); float m = exp(-d * d * 14.0) - 0.03;
-        if (m <= 0.0) discard; gl_FragColor = vec4(vC * vA * m, vA * m); }`,
-  }));
-  motes.frustumCulled = false;
-  scene.add(motes);
-}
+const moon = root.getObjectByName('Moon_web');
+moon.removeFromParent();
+root.traverse((o) => { if (o.isMesh) { o.geometry.dispose(); o.material.dispose(); } });
+// NASA CGI Moon Kit (svs.gsfc.nasa.gov/4720): LRO colour map + LOLA elevation as bump, both equirectangular,
+// so they wrap a plain UV sphere of the Blender moon's radius
+moon.geometry.computeBoundingSphere();
+const moonR = moon.geometry.boundingSphere.radius;
+moon.geometry.dispose(); moon.material.dispose();
+moon.geometry = new THREE.SphereGeometry(moonR, 192, 96);
+moonColor.colorSpace = THREE.SRGBColorSpace;
+moonColor.anisotropy = moonHeight.anisotropy = renderer.capabilities.getMaxAnisotropy();
+moon.material = new THREE.MeshStandardMaterial({ map: moonColor, bumpMap: moonHeight, bumpScale: 1.4,
+  emissiveMap: moonColor });                       // earthshine carries the surface: seas faintly visible on the night side
+moonMaterial(moon.material);
+moon.scale.multiplyScalar(1.18);                 // a little larger than the Blender export
+// moon placement per view; the loop blends intro -> watch view as the camera enters (tuned with ?debug)
+const MOON = {
+  intro: { x: moon.position.x, y: moon.position.y, z: moon.position.z, size: moon.scale.x },
+  watch: { x: 0, y: 5.66, z: -14, size: 2.88 },
+};
+scene.add(moon);
 
 // ---------- Watches: the CZARD 360° frame sets used by home-page/index.html, streamed into the scene ----------
 // Same keys and titles as the home page. Size is measured per watch (see caseFrac) so every case shows the same width.
@@ -723,8 +446,8 @@ const nearestFrame = (s, i) => {
   return null;
 };
 
-const WATER_Y = mirror.position.y;
-const WATCH = { z: 3.6, caseW: 1.35 };          // over the open water; every case is drawn 1.35 m wide
+// floating above the moon's horizon; every case is drawn 1.35 m wide (15% larger on mobile, where the screen is narrow)
+const WATCH = { z: 3.6, caseW: 1.35 * (mobile ? 1.15 : 1) };
 // rest on the camera's centre line at the watch's depth: the watch sits in the middle of the viewport
 const REST_Y = CAM.exp.pos.y + (CAM.exp.tgt.y - CAM.exp.pos.y) * (CAM.exp.pos.z - WATCH.z) / (CAM.exp.pos.z - CAM.exp.tgt.z);
 // widest opaque row of the front frame, as a fraction of the frame width (the case with its crown)
@@ -742,32 +465,23 @@ function caseFrac(img) {
 }
 const ASPECT = 16 / 9;                          // every frame set is 1.7778
 // The watch lives on its own layer: drawn after all post-processing (no tone map, grade, grain or bloom on the
-// product), and seen by the pond's reflection camera so the water still mirrors it.
+// product).
 const WATCH_LAYER = 3;
-mirror.camera.layers.enable(WATCH_LAYER);
-
-// Leaving: the watch burns away bottom-first along a ragged noisy front with a glowing ember edge.
-const DIS_NOISE = /* glsl */`float disN(vec2 uv){ return 0.5*uv.y + 0.5*fbm(vec3(uv*vec2(9.0, 5.0), 3.0)); }
-`;
 
 function makeSlot() {
   const tex = new THREE.Texture();
   tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
-  const u = { map: { value: tex }, uDis: { value: -1 }, uWater: { value: WATER_Y } };
+  const u = { map: { value: tex }, uFade: { value: 0 } };
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShaderMaterial({
     uniforms: u, transparent: true, depthWrite: false,
-    vertexShader: `varying vec2 vUv; varying float vY; void main(){ vUv = uv; vY = (modelMatrix * vec4(position, 1.0)).y;
+    vertexShader: `varying vec2 vUv; void main(){ vUv = uv;
       gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-    fragmentShader: NOISE + DIS_NOISE + /* glsl */`
-      uniform sampler2D map; uniform float uDis, uWater; varying vec2 vUv; varying float vY;
+    fragmentShader: /* glsl */`
+      uniform sampler2D map; uniform float uFade; varying vec2 vUv;
       void main(){
-        if (vY < uWater) discard;                                          // drawn without the scene's depth: the pond hides it by hand
         vec4 t = texture2D(map, vUv);                                      // the render as-is: no grading, no effects
-        float n = disN(vUv);
-        if (n < uDis || t.a < 0.003) discard;
-        vec3 col = t.rgb;
-        if (uDis > -0.5) col += vec3(1.0, 0.62, 0.22) * (1.0 - smoothstep(0.0, 0.035, n - uDis)) * 2.4;   // flaming edge, leaving only
-        gl_FragColor = vec4(col, t.a);
+        if (t.a < 0.003) discard;
+        gl_FragColor = vec4(t.rgb, t.a * uFade);
         #include <colorspace_fragment>
       }`,
   }));
@@ -777,61 +491,62 @@ function makeSlot() {
 }
 const slots = [makeSlot(), makeSlot()];
 
-// Spray: droplets thrown up where the watch breaks the surface, falling back under gravity and fading
-const SPRAY = Q.spray;
-const sprayGeo = new THREE.BufferGeometry();
-{
-  const rnd = mulberry32(7), a = new Float32Array(SPRAY * 4);
-  for (let i = 0; i < a.length; i += 4) { a[i] = rnd() * 2 - 1; a[i + 1] = rnd() * 2 - 1; a[i + 2] = rnd() * rnd(); a[i + 3] = rnd(); }
-  sprayGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(SPRAY * 3), 3));
-  sprayGeo.setAttribute('aSeed', new THREE.BufferAttribute(a, 4));
-}
-const sprayU = { uTime, pxPerM, uT0: { value: -100 }, uOrigin: { value: new THREE.Vector3(0, WATER_Y, WATCH.z) } };
-const spray = new THREE.Points(sprayGeo, new THREE.ShaderMaterial({
-  uniforms: sprayU, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-  vertexShader: /* glsl */`
-    attribute vec4 aSeed; uniform float uTime, uT0, pxPerM; uniform vec3 uOrigin; varying float vA;
-    void main(){
-      float t = uTime - uT0 - aSeed.w * 1.3;                            // keeps coming while case and strap pass through
-      vec3 v = vec3(aSeed.x * 0.9, 1.3 + aSeed.z * 3.2, aSeed.y * 0.7);
-      vec3 p = uOrigin + vec3(aSeed.x * 0.75, 0.0, aSeed.y * 0.12) + v * t + vec3(0.0, -4.9, 0.0) * t * t;
-      vec4 mv = modelViewMatrix * vec4(p, 1.0);
-      gl_Position = projectionMatrix * mv;
-      bool live = t > 0.0 && p.y > uOrigin.y;
-      vA = live ? clamp(1.0 - t / 1.8, 0.0, 1.0) : 0.0;
-      gl_PointSize = live ? 0.026 * pxPerM * (0.6 + aSeed.z) / -mv.z : 0.0;
-    }`,
-  fragmentShader: `varying float vA;
-    void main(){ float m = smoothstep(0.5, 0.1, length(gl_PointCoord - 0.5)); gl_FragColor = vec4(vec3(0.8, 0.85, 0.95) * vA * m, vA * m); }`,
-}));
-spray.frustumCulled = false;
-scene.add(spray);
-
 function updateSlot(sl, t) {
   const s = sl.s;
   if (!s) return;
-  if (sl.tIn === Infinity && t >= sl.startAt && s.n && s.frames[0]) {      // breaks the surface once its first frame is in
+  if (sl.tIn === Infinity && t >= sl.startAt && s.n && s.frames[0]) {      // appears once its first frame is in
     sl.h = WATCH.caseW / (caseFrac(s.frames[0]) * ASPECT);                  // same case width for every watch
     sl.mesh.scale.set(sl.h * ASPECT, sl.h, 1);
-    sl.tIn = t; uSplash.value.set(0, WATCH.z, t, 1); sprayU.uT0.value = t;
+    sl.tIn = t;
   }
-  // emergence: a spiral that tightens into the centre while the watch turns one full 360°, landing on its front
-  // the turn and the spiral run at constant speed and stop dead on the front view; only the rise eases in
-  const k = clamp01((t - sl.tIn) / 1.1), e = 1 - Math.pow(1 - k, 3), sw = 1 - k, ang = k * Math.PI * 2;
-  sl.mesh.position.set(Math.sin(ang) * 0.55 * sw,
-    THREE.MathUtils.lerp(WATER_Y - sl.h / 2 - 0.25, REST_Y, e) + Math.sin((t - sl.tIn) * 0.7) * 0.035 * k,
-    WATCH.z + (Math.cos(ang) - 1) * 0.3 * sw);
-  sl.mesh.rotation.z = Math.sin(ang) * 0.06 * sw;
-  if (t - sl.tIn < 1.2) sl.frame = Math.round(s.n * k);                    // lands exactly on the front; then it only turns when dragged
+  // revealed mid-spin (the first watch too): comes round from its back view and settles on the front, centred;
+  // after that it only turns when dragged
+  const since = t - sl.tIn, k = clamp01(since / FLICK.in), eo = 1 - Math.pow(1 - k, 3);
+  // suspended, breathing: a slow bob and an out-of-step half-degree sway
+  sl.mesh.position.set(0, REST_Y + Math.sin(since * 0.7) * 0.05 * k, WATCH.z);
+  sl.mesh.rotation.z = Math.sin(since * 0.43 + 1.0) * 0.008 * k;
+  sl.u.uFade.value = clamp01(k / 0.3);
+  if (since < FLICK.in + 0.1) sl.frame = -sl.flick * Math.round(s.n / 2 * (1 - eo));
+  if (t >= sl.tOut) {
+    // leaving: a flick, accelerating through half a turn to its back view while it fades
+    const k = clamp01((t - sl.tOut) / FLICK.out);
+    sl.frame = sl.outFrom + sl.outDir * Math.round(s.n / 2 * k * k);
+    sl.u.uFade.value = clamp01((1 - k) / 0.55);
+    if (k >= 1) { sl.s = null; sl.mesh.visible = false; return; }
+  }
   const img = s.n ? nearestFrame(s, ((sl.frame % s.n) + s.n) % s.n) : null;
   if (img && img !== sl.tex.image) { sl.tex.image = img; sl.tex.needsUpdate = true; }
   sl.mesh.visible = sl.tIn !== Infinity && !!sl.tex.image;
-  if (t >= sl.tOut) {                                                     // leaving: burns away with an ember edge
-    const d = (t - sl.tOut) / 1.9;
-    sl.u.uDis.value = d * 1.15 - 0.05;
-    if (d >= 1) { sl.s = null; sl.mesh.visible = false; }
-  }
 }
+
+// Watch change: out-flick, then the next watch is revealed half-way round; the sky turns with the spin
+const FLICK = { out: 0.55, in: 0.8, sky: 0.6 };   // seconds, seconds, radians of sky turn per change
+
+// Moonlight per watch (same order as WATCHES). The key light's tuned position (LIGHT.sunPos) is turned round the moon:
+// roll spins it about the view axis (which way the crescent faces), yaw swings it round the vertical (how much of the
+// moon is lit); tint is a subtle colour toward the watch, k scales the key's strength. Blended on the flick's timeline.
+const WATCH_LIGHT = [
+  { roll: 0,   yaw: 0,   tint: '#ffffff', k: 1.0 },   // Veni
+  { roll: -25, yaw: 15,  tint: '#ffe8d4', k: 1.05 },  // Vidi: warm, rose gold
+  { roll: 30,  yaw: -20, tint: '#f1f3ff', k: 0.95 },  // Vici
+  { roll: -50, yaw: 30,  tint: '#fff0dc', k: 1.1 },   // Écru: cream
+  { roll: 55,  yaw: -35, tint: '#dce8ff', k: 1.0 },   // Lac Léman: lake blue
+  { roll: 15,  yaw: 45,  tint: '#e3f4e6', k: 1.0 },   // Jura Gruén: green
+];
+const lightFrom = { roll: 0, yaw: 0, k: 1, tint: new THREE.Color('#ffffff') }, lightTo = { roll: 0, yaw: 0, k: 1, tint: new THREE.Color('#ffffff') };
+const lightNow = { roll: 0, yaw: 0, k: 1, tint: new THREE.Color('#ffffff') };
+let lightT0 = -1e9;
+function lightAt(t) {                            // fills lightNow with the blended preset at time t
+  const k = easeIO(clamp01((t - lightT0) / (FLICK.out + FLICK.in)));
+  for (const p of ['roll', 'yaw', 'k']) lightNow[p] = lightFrom[p] + (lightTo[p] - lightFrom[p]) * k;
+  lightNow.tint.lerpColors(lightFrom.tint, lightTo.tint, k);
+  return lightNow;
+}
+const skyTurn = { from: 0, to: 0, t0: 0 };
+const skyYaw = (t) => {
+  const k = clamp01((t - skyTurn.t0) / (FLICK.out + FLICK.in));
+  return skyTurn.from + (skyTurn.to - skyTurn.from) * easeIO(k);
+};
 
 // ---------- Experience flow ----------
 const $ = (id) => document.getElementById(id);
@@ -845,20 +560,31 @@ for (const [, name] of WATCHES) {
 
 function go(i) {
   if (enterT < 0 || performance.now() < lockUntil) return;
+  const dir = i > cur ? 1 : -1;                  // spin direction: forward through the list turns one way, back the other
   i = (i + WATCHES.length) % WATCHES.length;
   if (i === cur) return;
-  lockUntil = performance.now() + 2200;
+  lockUntil = performance.now() + (FLICK.out + FLICK.in) * 1000;
   const t = uTime.value, first = cur < 0;
-  if (!first) slots[active].tOut = t;
+  if (!first) {
+    const old = slots[active];
+    Object.assign(old, { tOut: t, outFrom: old.frame, outDir: dir });
+  }
+  // sky, moon and dust turn with every flick, the first reveal included (minus: the same way as the watch)
+  Object.assign(skyTurn, { from: skyYaw(t), to: skyYaw(t) - dir * FLICK.sky, t0: t });
+  // the moonlight glides from wherever it is now to this watch's preset, on the same timeline
+  const now = lightAt(t), wl = WATCH_LIGHT[i % WATCH_LIGHT.length];
+  Object.assign(lightFrom, { roll: now.roll, yaw: now.yaw, k: now.k }); lightFrom.tint.copy(now.tint);
+  Object.assign(lightTo, { roll: wl.roll, yaw: wl.yaw, k: wl.k }); lightTo.tint.set(wl.tint);
+  lightT0 = t;
   const sl = slots[active ^= 1], [key, name] = WATCHES[i];
-  Object.assign(sl, { s: frameSet(key), startAt: t + (first ? 0 : 1.0), tIn: Infinity, tOut: Infinity, frame: 0 });   // frame 0: front view
-  sl.u.uDis.value = -1;
+  // the new watch comes in as the old one reaches its back view (a little overlap hides the hand-off)
+  Object.assign(sl, { s: frameSet(key), startAt: t + (first ? 0 : FLICK.out * 0.8), tIn: Infinity, tOut: Infinity, frame: 0, flick: dir });
   cur = i;
   // keep frames for this watch and the next only (each set is ~65-260 MB decoded); going back re-reads the HTTP cache
   const keep = new Set([0, 1].map((d) => WATCHES[(i + d) % WATCHES.length][0]));
   for (const [k, s] of sets) if (!keep.has(k) && !slots.some((x) => x.s === s)) { s.dropped = true; sets.delete(k); }
   frameSet(WATCHES[(i + 1) % WATCHES.length][0]);
-  body.classList.remove('await-scroll', 'show-caption');
+  body.classList.remove('show-caption');
   [...$('nav').children].forEach((b, j) => b.setAttribute('aria-current', String(j === i)));
   clearTimeout(captionTimer);
   captionTimer = setTimeout(() => {
@@ -866,7 +592,7 @@ function go(i) {
     $('title').textContent = name;
     $('discover').href = `/products/${key}`;
     body.classList.add('show-caption');
-  }, (first ? 1100 : 2100));
+  }, (first ? 1100 : 1300));
 }
 
 $('enter').addEventListener('click', () => {
@@ -874,11 +600,10 @@ $('enter').addEventListener('click', () => {
   enterT = uTime.value;
   body.classList.add('entered');
   frameSet(WATCHES[0][0]);                       // start fetching while the camera moves
-  setTimeout(() => { if (cur < 0) body.classList.add('await-scroll'); body.classList.add('show-nav'); $('reveal').focus({ preventScroll: true }); }, 3600);
+  setTimeout(() => body.classList.add('show-nav'), ENTER.dur * 1000);   // the first watch is revealed from the loop
 });
-$('reveal').addEventListener('click', () => go(cur + 1));
 addEventListener('wheel', (e) => {
-  if (enterT < 0 || Math.abs(e.deltaY) < 12) return;
+  if (enterT < 0 || Math.abs(e.deltaY) < 12 || e.target.closest?.('.lil-gui')) return;   // debug panel scrolls itself
   if (cur < 0 && e.deltaY < 0) return;
   go(cur + Math.sign(e.deltaY));
 }, { passive: true });
@@ -906,56 +631,143 @@ addEventListener('pointermove', (e) => {
 addEventListener('pointerup', () => { drag = null; });
 addEventListener('pointercancel', () => { drag = null; });
 
+// The watch gets its own transparent canvas above the main one and below the captions (z-index 2), so nothing in the
+// scene (dust, bloom, grain) ever draws over or onto the product.
+const watchR = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+watchR.domElement.className = 'watch-canvas';
+document.body.appendChild(watchR.domElement);
+const sizeWatchR = () => { watchR.setPixelRatio(pixelRatio); watchR.setSize(innerWidth, innerHeight); };
+sizeWatchR(); addEventListener('resize', sizeWatchR);
 const watchCam = camera.clone();               // overlay pass camera: sees only the watch layer
 watchCam.layers.set(WATCH_LAYER);
 watchCam.matrixAutoUpdate = false; watchCam.matrixWorldAutoUpdate = false;   // copies the main camera's matrices each frame
 for (const sl of slots) sl.mesh.visible = true;   // so their shaders compile up front
 await renderer.compileAsync(scene, camera);
-await renderer.compileAsync(scene, watchCam);
+await watchR.compileAsync(scene, watchCam);
 for (const sl of slots) sl.mesh.visible = false;
 document.getElementById('loading').remove();
-renderer.domElement.classList.add('ready');
+renderer.domElement.classList.add('ready'); watchR.domElement.classList.add('ready');
 body.classList.add('ready');
 
+// ---------- ?debug: live lighting panel ----------
+const DBG = { view: -1, spin: true };          // view >= 0 pins the intro→watch blend (0 intro, 1 watch view)
+if (new URLSearchParams(location.search).has('debug')) {
+  const { default: GUI } = await import('https://cdn.jsdelivr.net/npm/lil-gui@0.19.2/+esm');
+  const gui = new GUI({ title: 'Lighting' });
+  gui.add(DBG, 'view', -1, 1, 0.01).name('preview (-1 = auto)');
+  gui.add(DBG, 'spin').name('moon spins');
+  const names = { sun: 'key (sun)', under: 'under light', hemi: 'sky / hemi', fill: 'front fill', rim: 'back rim', limb: 'limb glow', earthshine: 'earthshine' };
+  for (const [i, label] of [[0, 'Intro'], [1, 'Watch view']]) {
+    const f = gui.addFolder(label);
+    for (const k in names) f.add(LIGHT[k], i, 0, k === 'under' ? 15 : k === 'sun' ? 10 : 3, 0.01).name(names[k]);
+  }
+  const p = gui.addFolder('Key light position');
+  for (const a of ['x', 'y', 'z']) p.add(LIGHT.sunPos, a, -150, 150, 0.1);
+  const c = gui.addFolder('Colours');
+  c.addColor(LIGHT, 'sunColor').name('key').onChange((v) => sun.color.set(v));
+  c.addColor(LIGHT, 'underColor').name('under').onChange((v) => under.color.set(v));
+  // lights are directional, so moving the moon keeps its lighting exactly as tuned
+  for (const [k, label] of [['intro', 'Moon: intro'], ['watch', 'Moon: watch view']]) {
+    const mp = gui.addFolder(label);
+    for (const a of ['x', 'y', 'z']) mp.add(MOON[k], a, -60, 30, 0.01);
+    mp.add(MOON[k], 'size', 0.1, 20, 0.01);
+  }
+  gui.add(skyU.uSkyExp, 'value', 0, 40, 0.1).name('sky (HDRI) exposure');
+  const m = gui.addFolder('Moon & bloom');
+  m.add(moon.material, 'bumpScale', 0, 15, 0.1).name('relief (bump)');
+  m.add(bloom, 'strength', 0, 4, 0.01).name('bloom strength');
+  m.add(bloom, 'radius', 0, 1.5, 0.01).name('bloom radius');
+  m.add(bloom, 'threshold', 0, 5, 0.01).name('bloom threshold');
+  gui.add({ copy() {
+    const out = JSON.stringify({ LIGHT, MOON, skyExposure: skyU.uSkyExp.value, bumpScale: moon.material.bumpScale,
+      bloom: { strength: bloom.strength, radius: bloom.radius, threshold: bloom.threshold } }, null, 2);
+    navigator.clipboard.writeText(out).then(() => alert('Lighting values copied: paste them to Claude'), () => console.log(out));
+  } }, 'copy').name('📋 copy values');
+}
+
 // ---------- Loop with adaptive resolution ----------
-let frames = 0, acc = 0;
+let frames = 0, acc = 0, moonSpin = 0;
+const skyEuler = new THREE.Euler(0, 0, 0, 'YXZ'), skyM4 = new THREE.Matrix4();
+const pivA = new THREE.Vector3(), pivB = new THREE.Vector3(), pivQ = new THREE.Quaternion();   // moon-pivot parallax
+const camBasePos = new THREE.Vector3(), camBaseQuat = new THREE.Quaternion();
+const sunDir = new THREE.Vector3(), AXIS_Y = new THREE.Vector3(0, 1, 0), AXIS_Z = new THREE.Vector3(0, 0, 1);
+const WATCH_PARALLAX = 0.4;                      // share of the cursor parallax the watch gets (60% less than the scene)
+const watchPos = new THREE.Vector3(), watchQuat = new THREE.Quaternion(), ONE3 = new THREE.Vector3(1, 1, 1);
 renderer.setAnimationLoop(() => {
   const dt = clock.getDelta();
   uTime.value += dt;
   const t = uTime.value;
   // camera: eased pull-back after "Enter", with a slow parallax that trails the pointer
-  const e = enterT < 0 ? 0 : easeIO(clamp01((t - enterT) / 4.2));
+  const e = DBG.view >= 0 ? DBG.view : enterT < 0 ? 0 : smoother(clamp01((t - enterT) / ENTER.dur));
+  // the first watch flicks in once the camera has nearly landed (driven by progress, not a timer, so it never slides)
+  if (enterT >= 0 && cur < 0 && e >= ENTER.reveal) go(0);
   pointerS.lerp(pointer, 0.035);
+  if (DBG.spin) moonSpin += dt * 0.05;           // ~2 min per turn
+  // starts with the near side (longitude 0) facing the camera; turns with the sky on a watch change. The sky's yaw
+  // rotates the lookup direction, which moves the picture the opposite way, so the moon takes the negative
+  moon.rotation.y = moonSpin - Math.PI / 2 - skyYaw(t);
+  // dust sweeps with the same turn: the moon's face moves +x for a forward flick, so does the dust (20 units per radian)
+  dust.material.uniforms.uShift.value.x = -skyYaw(t) * 20;
+  const mixM = (k) => MOON.intro[k] + (MOON.watch[k] - MOON.intro[k]) * e;
+  // size grows geometrically (equal ratios per step) so it reads as one steady approach, not a late balloon
+  moon.position.set(mixM('x'), mixM('y'), mixM('z'));
+  moon.scale.setScalar(MOON.intro.size * Math.pow(MOON.watch.size / MOON.intro.size, e));
+  // parallax pivots on the moon: frame the shot without the pointer, then slide the camera with it and turn it by
+  // exactly the angle that keeps the moon on the same spot. Nearer things (watch, dust) slide one way, the sky the other.
   camera.position.lerpVectors(CAM.intro.pos, CAM.exp.pos, e);
-  camera.position.x += pointerS.x * 0.35; camera.position.y -= pointerS.y * 0.14;
   camera.lookAt(camTgt.lerpVectors(CAM.intro.tgt, CAM.exp.tgt, e));
-  pxPerM.value = renderer.domElement.height / (2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2));
-  if (moon) moon.rotation.y = t * 0.05;          // ~2 min per turn; craters turn, the lit crescent stays put
+  pivA.subVectors(moon.position, camera.position).normalize();
+  camBasePos.copy(camera.position); camBaseQuat.copy(camera.quaternion);   // the pose without pointer parallax
+  camera.position.x += pointerS.x * 0.6; camera.position.y -= pointerS.y * 0.25;
+  pivB.subVectors(moon.position, camera.position).normalize();
+  camera.quaternion.premultiply(pivQ.setFromUnitVectors(pivA, pivB));
+  // intro: crescent lit from below; watch view: key light from the upper left, night side falls to black
+  const mixL = (k) => LIGHT[k][0] + (LIGHT[k][1] - LIGHT[k][0]) * e;
+  under.intensity = mixL('under'); sun.intensity = mixL('sun'); moonRim.k.value = mixL('limb');
+  hemi.intensity = mixL('hemi'); fill.intensity = mixL('fill'); rim.intensity = mixL('rim');
+  moon.material.emissiveIntensity = mixL('earthshine');
+  // per-watch moonlight: the tuned key position turned round the moon (yaw about the vertical, roll about the view
+  // axis), tinted toward the watch and scaled; lightAt() blends presets on the flick's timeline
+  const wl = lightAt(t);
+  sunDir.set(LIGHT.sunPos.x, LIGHT.sunPos.y, LIGHT.sunPos.z).sub(sun.target.position)
+    .applyAxisAngle(AXIS_Y, THREE.MathUtils.degToRad(wl.yaw)).applyAxisAngle(AXIS_Z, THREE.MathUtils.degToRad(wl.roll));
+  sun.position.copy(sun.target.position).add(sunDir);
+  sun.intensity *= wl.k;
+  sun.color.set(LIGHT.sunColor).multiply(wl.tint);
+  moonRim.dir.value.subVectors(sun.position, sun.target.position).normalize().transformDirection(camera.matrixWorldInverse);
+  // sky drifts gently with the pointer (and very slowly on its own)
+  // no pointer term here any more: the camera's turn round the moon now moves the sky, in the right direction
+  skyEuler.set(0, t * 0.002 + skyYaw(t), 0);   // slow drift + the turn that follows a watch change
+  skyU.uSkyRot.value.setFromMatrix4(skyM4.makeRotationFromEuler(skyEuler));
+  // grid: cursor light (device px, y up) and a small parallax shift
+  ptrFast.lerp(pointer, 0.18);
+  const R = skyU.uRes.value;
+  if (mobile) skyU.uPtr.value.set(-1e4, -1e4);  // no cursor on touch: the grid's cursor light stays off
+  else skyU.uPtr.value.set((ptrFast.x * 0.5 + 0.5) * R.x, (0.5 - ptrFast.y * 0.5) * R.y);
+  // moon glow in the sky: direction and angular radius of the moon's disc from the camera
+  const md = skyU.uMoonDir.value.subVectors(moon.position, camera.position), mDist = md.length();
+  md.divideScalar(mDist);
+  skyU.uMoonRad.value = Math.asin(Math.min(1, moonR * moon.scale.x / mDist));
+  meteorUpdate(t);
+  // grid sphere: the sky's turn (drift + watch changes) at half speed, same direction; the camera's pivot round the
+  // moon moves it with the pointer on its own
+  skyEuler.set(0, (t * 0.002 + skyYaw(t)) * 0.5, 0);
+  skyU.uGridRot.value.setFromMatrix4(skyM4.makeRotationFromEuler(skyEuler));
   for (const sl of slots) updateSlot(sl, t);
-  // grass LOD: each chunk draws the share of its (randomly ordered) blades its distance calls for
-  const density = grassMaterial.uniforms.uDensity.value;
-  for (const c of grass.children) {
-    c.geometry.instanceCount = Math.ceil(c.userData.total * grassKeep(camera.position.distanceTo(c.geometry.boundingSphere.center)) * density);
-  }
   composer.render(dt);
-  // the product on top, untouched by post (the pond hides its submerged part in-shader; nothing else sits in front)
-  if (slots[0].mesh.visible || slots[1].mesh.visible) {
-    watchCam.matrixWorld.copy(camera.matrixWorld); watchCam.matrixWorldInverse.copy(camera.matrixWorldInverse);
-    watchCam.projectionMatrix.copy(camera.projectionMatrix); watchCam.projectionMatrixInverse.copy(camera.projectionMatrixInverse);
-    renderer.autoClear = false; renderer.clearDepth(); renderer.render(scene, watchCam); renderer.autoClear = true;
-  }
-  // every ~90 frames, if under ~45 fps: thin the far grass first (hard to notice), then lower resolution (floor 0.75);
-  // with headroom, restore in the reverse order
+  // the product on top of everything, untouched by post; rendered even when hidden so it clears
+  // the watch sees only 40% of the pointer parallax: its camera sits 40% of the way from the no-pointer pose to the real one
+  watchPos.lerpVectors(camBasePos, camera.position, WATCH_PARALLAX);
+  watchQuat.slerpQuaternions(camBaseQuat, camera.quaternion, WATCH_PARALLAX);
+  watchCam.matrixWorld.compose(watchPos, watchQuat, ONE3); watchCam.matrixWorldInverse.copy(watchCam.matrixWorld).invert();
+  watchCam.projectionMatrix.copy(camera.projectionMatrix); watchCam.projectionMatrixInverse.copy(camera.projectionMatrixInverse);
+  watchR.render(scene, watchCam);
+  // every ~90 frames: lower resolution if under ~45 fps (floor 0.75), restore it with headroom
   acc += dt; if (++frames === 90) {
     const avg = acc / frames; frames = 0; acc = 0;
-    const cap = Math.min(devicePixelRatio, Q.maxPR), u = grassMaterial.uniforms.uDensity;
-    if (avg > 1 / 45) {
-      if (u.value > 0.6) u.value = Math.max(0.6, u.value - 0.15);
-      else if (pixelRatio > 0.75) { pixelRatio = Math.max(0.75, pixelRatio - 0.15); resize(); }
-    } else if (avg < 1 / 58) {
-      if (pixelRatio < cap) { pixelRatio = Math.min(cap, pixelRatio + 0.1); resize(); }
-      else if (u.value < 1) u.value = Math.min(1, u.value + 0.1);
-    }
+    const cap = Math.min(devicePixelRatio, Q.maxPR);
+    if (avg > 1 / 45 && pixelRatio > 0.75) { pixelRatio = Math.max(0.75, pixelRatio - 0.15); resize(); sizeWatchR(); }
+    else if (avg < 1 / 58 && pixelRatio < cap) { pixelRatio = Math.min(cap, pixelRatio + 0.1); resize(); sizeWatchR(); }
   }
 });
 </script>

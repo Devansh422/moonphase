@@ -168,22 +168,43 @@ const skyTex = new THREE.TextureLoader().load('nebula_hdr.jpg');
 // raw data (no sRGB decode); no mipmaps: the atan() seam would pick the smallest mip and draw a line
 Object.assign(skyTex, { colorSpace: THREE.NoColorSpace, generateMipmaps: false, minFilter: THREE.LinearFilter });
 const skyU = { uSky: { value: skyTex }, uSkyExp: { value: 6 }, uSkyRot: { value: new THREE.Matrix3() }, uPR: { value: 1 }, uRes: { value: new THREE.Vector2(1, 1) },
-  uTime, uPtr: { value: new THREE.Vector2(-1e4, -1e4) }, uGridRot: { value: new THREE.Matrix3() },
+  uTime, uFill: { value: 1 },
   uMoonDir: { value: new THREE.Vector3(0, 0, -1) }, uMoonRad: { value: 0.1 }, uMoonGlow: { value: 1 },
-  uMet: { value: new THREE.Vector3() }, uMetDir: { value: new THREE.Vector2(1, 0) }, uMetT: { value: -1 } };
-// shooting stars: one every 7-16 s, 0.7 s across the upper part of the screen
-const meteor = { t0: 0, next: 6 };
+  uMS: { value: [] }, uMA: { value: [] }, uMP: { value: [] } };
+// Shooting stars live on the sky sphere in the HDRI's own frame (rd = uSkyRot * view ray), so they turn with the
+// nebula and shift with the camera like it. Like a real shower they all radiate from one fixed radiant: each runs
+// along a great circle away from it at 12-30 deg/s (real meteor speeds). uMS = start dir, uMA = the circle's axis,
+// uMP = (travel angle, tail angle, progress 0..1 or <0 off, peak brightness; negative = ends in a flare).
+// Continuous: METEORS at once, each relaunching 0.3-2.5 s after it burns out.
+const METEORS = 3;
+const meteors = Array.from({ length: METEORS }, (_, i) => {
+  skyU.uMS.value.push(new THREE.Vector3(1, 0, 0)); skyU.uMA.value.push(new THREE.Vector3(0, 1, 0));
+  skyU.uMP.value.push(new THREE.Vector4(0, 0, -1, 0));
+  return { t0: 0, dur: 1, next: 0.5 + i * 0.9 };   // staggered first launches
+});
+let radiant = null;                               // sky-frame direction, fixed at the first launch (up and behind the moon)
+const mTmp = new THREE.Vector3();
+const toSky = (v) => v.applyMatrix3(skyU.uSkyRot.value).normalize();
 function meteorUpdate(t) {
-  if (t >= meteor.next) {
-    const w = innerWidth, h = innerHeight, a = THREE.MathUtils.degToRad(20 + Math.random() * 30);   // 20-50 deg below level
-    skyU.uMet.value.set(w * (0.15 + Math.random() * 0.7), h * (0.6 + Math.random() * 0.35), 220 + Math.random() * 180);
-    skyU.uMetDir.value.set(Math.cos(a) * (Math.random() < 0.5 ? 1 : -1), -Math.sin(a));   // left or right, always falling
-    meteor.t0 = t; meteor.next = t + 7 + Math.random() * 9;
-  }
-  const k = (t - meteor.t0) / 0.7;
-  skyU.uMetT.value = k >= 0 && k <= 1 ? k : -1;
+  if (!radiant) radiant = toSky(new THREE.Vector3(-0.35, 1.0, -0.55));
+  meteors.forEach((m, i) => {
+    if (t >= m.next) {
+      // start somewhere in the current view (most of its width, the upper two-thirds)
+      const ty = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2), tx = ty * camera.aspect;
+      mTmp.set((Math.random() * 1.8 - 0.9) * tx, (Math.random() * 1.1 - 0.2) * ty, -1).applyQuaternion(camera.quaternion);
+      const S = skyU.uMS.value[i].copy(toSky(mTmp)), A = skyU.uMA.value[i].crossVectors(radiant, S);
+      if (A.lengthSq() < 1e-6) { m.next = t + 0.2; return; }   // started on the radiant itself: no direction, retry
+      A.normalize();                                            // S is perpendicular to A by construction
+      const dur = 0.4 + Math.random() * 0.8, travel = THREE.MathUtils.degToRad(12 + Math.random() * 18) * dur;
+      const tail = Math.min(travel * 0.6, THREE.MathUtils.degToRad(4 + Math.random() * 8));
+      const peak = (0.35 + Math.pow(Math.random(), 2.5) * 1.6) * (Math.random() < 0.3 ? -1 : 1);   // mostly faint, a few bright
+      skyU.uMP.value[i].set(travel, tail, 0, peak);
+      m.t0 = t; m.dur = dur; m.next = t + dur + 0.3 + Math.random() * 2.2;
+    }
+    const k = (t - m.t0) / m.dur;
+    skyU.uMP.value[i].z = k >= 0 && k <= 1 ? k : -1;
+  });
 }
-const ptrFast = new THREE.Vector2();              // grid spotlight: tracks the pointer more tightly than the parallax
 const sky = new THREE.Mesh(
   new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3)),
   new THREE.ShaderMaterial({
@@ -196,8 +217,8 @@ const sky = new THREE.Mesh(
         gl_Position = vec4(position.xy, 1.0, 1.0);
       }`,
     fragmentShader: NOISE + /* glsl */`
-      uniform sampler2D uSky; uniform mat3 uSkyRot; uniform mat3 uGridRot; uniform float uPR, uTime, uSkyExp, uMoonRad, uMoonGlow, uMetT; uniform vec2 uRes, uPtr, uMetDir;
-      uniform vec3 uMoonDir, uMet; varying vec3 vDir;
+      uniform sampler2D uSky; uniform mat3 uSkyRot; uniform float uPR, uTime, uSkyExp, uMoonRad, uMoonGlow, uFill; uniform vec2 uRes; uniform vec3 uMoonDir;
+      uniform vec3 uMS[${METEORS}], uMA[${METEORS}]; uniform vec4 uMP[${METEORS}]; varying vec3 vDir;
       void main(){
         vec3 rd = uSkyRot * normalize(vDir);
         vec2 uv = vec2(atan(rd.z, rd.x) * 0.15915494 + 0.5, asin(clamp(rd.y, -1.0, 1.0)) * 0.31830989 + 0.5);
@@ -212,35 +233,35 @@ const sky = new THREE.Mesh(
         vec3 vd = normalize(vDir);
         float ang = acos(clamp(dot(vd, uMoonDir), -1.0, 1.0));
         col += vec3(0.5, 0.56, 0.68) * 0.05 * exp(-max(ang - uMoonRad, 0.0) / 0.12) * uMoonGlow;
-        // shooting star: a short, fading streak (CSS px, y up); uMet = start xy, length; uMetT = 0..1 progress, <0 off
-        if (uMetT >= 0.0) {
-          vec2 rel = gl_FragCoord.xy / uPR - (uMet.xy + uMetDir * uMet.z * uMetT);
-          float along = dot(rel, -uMetDir), across = dot(rel, vec2(-uMetDir.y, uMetDir.x));
-          float m = step(0.0, along) * (1.0 - smoothstep(0.0, uMet.z * 0.45, along)) * exp(-across * across / 0.8);
-          col += vec3(0.85, 0.9, 1.0) * m * sin(3.14159 * uMetT) * 1.3;
+        // shooting stars (see meteorUpdate): measured on the sky sphere, so they ride the HDRI. Each pixel finds its
+        // angle off the meteor's great circle (across) and how far behind the head it is along it (sa); pxAng turns
+        // angles into screen px so the trail stays a 1 px line at any resolution.
+        float pxAng = length(fwidth(rd));
+        for (int i = 0; i < ${METEORS}; i++) {
+          vec4 P = uMP[i];
+          if (P.z < 0.0) continue;
+          vec3 S = uMS[i], A = uMA[i];
+          float hA = P.x * P.z;                                        // head's angle along the path
+          vec3 H = S * cos(hA) + cross(A, S) * sin(hA);
+          float off = asin(clamp(dot(rd, A), -1.0, 1.0));             // angle off the great circle
+          vec3 pp = normalize(rd - A * sin(off));
+          float sa = atan(dot(cross(pp, H), A), dot(pp, H));           // > 0: behind the head
+          float tl = max(min(P.y, hA), 1e-4);                           // the tail grows out of the start point
+          float trail = step(0.0, sa) * (1.0 - smoothstep(0.0, tl, sa)); trail *= trail;
+          float ax = off / pxAng, hd = length(vec2(sa, off)) / pxAng;
+          float lc = pow(sin(3.14159 * P.z), 0.6);                      // ignites, peaks, burns out
+          if (P.w < 0.0) lc *= 1.0 + 1.5 * exp(-pow((P.z - 0.78) / 0.05, 2.0));   // terminal flare
+          col += (vec3(0.82, 1.0, 0.95) * exp(-hd * hd / 2.5) * 1.4             // blue-green head (round, may bloom)
+                + vec3(1.0, 0.88, 0.75) * trail * exp(-ax * ax / 0.6) * 0.9)   // warm, fading train
+                 * lc * abs(P.w);
         }
-        // Grid on the celestial sphere, seen from inside it: longitude / latitude lines every 8 degrees (~216 CSS px
-        // at the centre) in the view ray's own direction, so it turns with the camera and the sky like a planetarium
-        // dome. uGridRot spins it with the sky's turn at half speed (a layer between the moon and the stars).
-        // Lines fade into the edges, the bottom and the poles, break up like etched glass, and catch the cursor light.
-        vec3 gd = uGridRot * normalize(vDir);
-        float lonA = atan(gd.z, gd.x), lonB = atan(-gd.z, -gd.x);      // B's +-PI seam is on the opposite side
-        float lat = asin(clamp(gd.y, -1.0, 1.0));
-        const float CELL = 0.13962634;                                  // 8 degrees: 45 cells round, so lon wraps cleanly
-        vec2 gc = vec2(lonA, lat) / CELL;
-        vec2 fw = vec2(min(fwidth(lonA), fwidth(lonB)), fwidth(lat)) / CELL;   // seam-safe screen derivative
-        vec2 f = abs(fract(gc + 0.5) - 0.5);
-        vec2 dpx = f / max(fw, 1e-5);                                   // device px to the nearest line on each axis
-        float line = 1.0 - smoothstep(0.35 * uPR, 0.35 * uPR + 1.0, min(dpx.x, dpx.y));
-        float node = 1.0 - smoothstep(0.0, 2.2 * uPR, length(dpx));     // crossings
-        vec2 q = gl_FragCoord.xy / uRes - 0.5; q.x *= uRes.x / uRes.y;
-        float fade = smoothstep(0.95, 0.1, length(q)) * smoothstep(0.08, 0.45, gl_FragCoord.y / uRes.y)
-                   * smoothstep(0.97, 0.8, abs(gd.y));                  // longitudes bunch up at the poles
-        float wear = 0.45 + 0.55 * vnoise(gd * 7.0 + vec3(0.0, 0.0, uTime * 0.04));
-        float spot = exp(-pow(length(gl_FragCoord.xy - uPtr) / (240.0 * uPR), 2.0));
-        float g = (line * wear + node * 0.9) * (0.55 * fade + 1.4 * spot);
-        vec3 tint = mix(vec3(0.5, 0.58, 0.72), min(col, 1.0) * 4.0 + 0.3, 0.25);   // borrows a little of the nebula behind it
-        col += tint * g * 0.05;
+        // fill light in the bottom corners: soft nebular glows (cool blue left, violet right) breathing with slow
+        // drifting noise, so the lower edges aren't empty black
+        vec2 sc = gl_FragCoord.xy / uRes, ar = vec2(uRes.x / uRes.y, 1.0);
+        float haze = fbm(vec3(sc * ar * 2.2, uTime * 0.015));
+        float gL = exp(-length((sc - vec2(-0.04, -0.12)) * ar) / 0.42);
+        float gR = exp(-length((sc - vec2(1.04, -0.12)) * ar) / 0.42);
+        col += (vec3(0.30, 0.40, 0.78) * gL + vec3(0.52, 0.42, 0.75) * gR) * (0.3 + 0.9 * haze) * 0.12 * uFill;
         gl_FragColor = vec4(col, 0.0);   // alpha 0: the grade keeps the nebula's colour
       }`,
   })
@@ -679,13 +700,14 @@ if (new URLSearchParams(location.search).has('debug')) {
     mp.add(MOON[k], 'size', 0.1, 20, 0.01);
   }
   gui.add(skyU.uSkyExp, 'value', 0, 40, 0.1).name('sky (HDRI) exposure');
+  gui.add(skyU.uFill, 'value', 0, 4, 0.01).name('corner fill light');
   const m = gui.addFolder('Moon & bloom');
   m.add(moon.material, 'bumpScale', 0, 15, 0.1).name('relief (bump)');
   m.add(bloom, 'strength', 0, 4, 0.01).name('bloom strength');
   m.add(bloom, 'radius', 0, 1.5, 0.01).name('bloom radius');
   m.add(bloom, 'threshold', 0, 5, 0.01).name('bloom threshold');
   gui.add({ copy() {
-    const out = JSON.stringify({ LIGHT, MOON, skyExposure: skyU.uSkyExp.value, bumpScale: moon.material.bumpScale,
+    const out = JSON.stringify({ LIGHT, MOON, skyExposure: skyU.uSkyExp.value, cornerFill: skyU.uFill.value, bumpScale: moon.material.bumpScale,
       bloom: { strength: bloom.strength, radius: bloom.radius, threshold: bloom.threshold } }, null, 2);
     navigator.clipboard.writeText(out).then(() => alert('Lighting values copied: paste them to Claude'), () => console.log(out));
   } }, 'copy').name('📋 copy values');
@@ -745,20 +767,11 @@ renderer.setAnimationLoop(() => {
   // no pointer term here any more: the camera's turn round the moon now moves the sky, in the right direction
   skyEuler.set(0, t * 0.002 + skyYaw(t), 0);   // slow drift + the turn that follows a watch change
   skyU.uSkyRot.value.setFromMatrix4(skyM4.makeRotationFromEuler(skyEuler));
-  // grid: cursor light (device px, y up) and a small parallax shift
-  ptrFast.lerp(pointer, 0.18);
-  const R = skyU.uRes.value;
-  if (mobile) skyU.uPtr.value.set(-1e4, -1e4);  // no cursor on touch: the grid's cursor light stays off
-  else skyU.uPtr.value.set((ptrFast.x * 0.5 + 0.5) * R.x, (0.5 - ptrFast.y * 0.5) * R.y);
   // moon glow in the sky: direction and angular radius of the moon's disc from the camera
   const md = skyU.uMoonDir.value.subVectors(moon.position, camera.position), mDist = md.length();
   md.divideScalar(mDist);
   skyU.uMoonRad.value = Math.asin(Math.min(1, moonR * moon.scale.x / mDist));
   meteorUpdate(t);
-  // grid sphere: the sky's turn (drift + watch changes) at half speed, same direction; the camera's pivot round the
-  // moon moves it with the pointer on its own
-  skyEuler.set(0, (t * 0.002 + skyYaw(t)) * 0.5, 0);
-  skyU.uGridRot.value.setFromMatrix4(skyM4.makeRotationFromEuler(skyEuler));
   for (const sl of slots) updateSlot(sl, t);
   composer.render(dt);
   // the product on top of everything, untouched by post; rendered even when hidden so it clears

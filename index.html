@@ -66,6 +66,19 @@
   .nav button::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: rgba(244,239,230,.35); transition: background .4s, transform .4s; }
   .nav button[aria-current="true"]::before { background: #f4efe6; transform: scale(1.5); }
   .nav button:focus-visible { outline: 1px solid rgba(244,239,230,.6); }
+  /* moon-phase complications in the bottom corners (watch view): hairline SVG, drawn by updatePhases() each frame */
+  .phase { position: fixed; bottom: 2.4rem; z-index: 2; pointer-events: none; color: #f4efe6; opacity: 0;
+    transform: translateY(10px); transition: opacity 1.6s ease 1.2s, transform 1.6s cubic-bezier(.16,1,.3,1) 1.2s; }
+  .entered .phase { opacity: .85; transform: none; }
+  .phase-l { left: clamp(16px, 3vw, 52px); }
+  .phase-r { right: clamp(16px, 3vw, 52px); text-align: right; }
+  .phase svg { display: block; overflow: visible; }
+  .phase-r svg { margin-left: auto; }
+  .phase .lbl { margin: .8rem 0 0; font: 400 .56rem/1.6 'Jost', sans-serif; letter-spacing: .38em; text-transform: uppercase; opacity: .6; }
+  .phase .ticks { transform-origin: 40px 40px; animation: ticks 120s linear infinite; }
+  @keyframes ticks { to { transform: rotate(360deg); } }
+  @media (max-width: 760px) { .phase { bottom: 1.4rem; } .phase .lbl { display: none; } .phase svg { transform: scale(.72); transform-origin: bottom left; }
+    .phase-r svg { transform-origin: bottom right; } }
   @media (max-width: 760px) { .nav { right: 10px; } .caption { bottom: 2rem; } }
   @media (prefers-reduced-motion: reduce) { .fade { transition-duration: .01s; } }
 </style>
@@ -85,6 +98,19 @@
   <a class="btn" id="discover" href="#">Discover</a>
 </div>
 <nav class="nav fade" id="nav" aria-label="Watches"></nav>
+<!-- moon-phase complications (decorative): left, a strip flowing through the lunar cycle; right, a phase dial -->
+<div class="phase phase-l" aria-hidden="true">
+  <svg id="phaseStrip" width="186" height="20" viewBox="0 0 186 20"></svg>
+  <p class="lbl">Lunar cycle</p>
+</div>
+<div class="phase phase-r" aria-hidden="true">
+  <svg width="80" height="80" viewBox="0 0 80 80">
+    <g class="ticks" stroke="currentColor" stroke-width=".6" opacity=".45" id="phaseTicks"></g>
+    <circle cx="40" cy="40" r="22" fill="none" stroke="currentColor" stroke-width=".6" opacity=".5" />
+    <path id="phaseMoon" fill="currentColor" opacity=".9" />
+  </svg>
+  <p class="lbl" id="phaseName"></p>
+</div>
 <script type="module">
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -224,8 +250,6 @@ const sky = new THREE.Mesh(
         vec2 uv = vec2(atan(rd.z, rd.x) * 0.15915494 + 0.5, asin(clamp(rd.y, -1.0, 1.0)) * 0.31830989 + 0.5);
         // nebula_hdr.jpg is the HDRI log-encoded into 8 bits (see SKY_LOG): back to linear HDR, then exposed
         vec3 col = (exp2(texture2D(uSky, uv).rgb * ${SKY_LOG.L.toFixed(4)}) - 1.0) * ${SKY_LOG.E} * uSkyExp;
-        // cap the brightest channel below the bloom threshold (hue kept): HDR star texels would otherwise bloom into squares
-        col *= min(1.0, 1.6 / max(max(col.r, col.g), max(col.b, 1e-4)));
         // scintillation: only bright points (stars) flicker, each on its own noise cell (~1.5 px) and pace
         float lum = max(col.r, max(col.g, col.b));
         col *= 1.0 + smoothstep(0.12, 0.7, lum) * (vnoise(vec3(rd.xy * 900.0 + rd.z * 300.0, uTime * 2.5)) - 0.5) * 1.1;
@@ -251,7 +275,7 @@ const sky = new THREE.Mesh(
           float ax = off / pxAng, hd = length(vec2(sa, off)) / pxAng;
           float lc = pow(sin(3.14159 * P.z), 0.6);                      // ignites, peaks, burns out
           if (P.w < 0.0) lc *= 1.0 + 1.5 * exp(-pow((P.z - 0.78) / 0.05, 2.0));   // terminal flare
-          col += (vec3(0.82, 1.0, 0.95) * exp(-hd * hd / 2.5) * 1.4             // blue-green head (round, may bloom)
+          col += (vec3(0.82, 1.0, 0.95) * exp(-hd * hd / 2.5) * 1.4             // blue-green head
                 + vec3(1.0, 0.88, 0.75) * trail * exp(-ax * ax / 0.6) * 0.9)   // warm, fading train
                  * lc * abs(P.w);
         }
@@ -262,6 +286,9 @@ const sky = new THREE.Mesh(
         float gL = exp(-length((sc - vec2(-0.04, -0.12)) * ar) / 0.42);
         float gR = exp(-length((sc - vec2(1.04, -0.12)) * ar) / 0.42);
         col += (vec3(0.30, 0.40, 0.78) * gL + vec3(0.52, 0.42, 0.75) * gR) * (0.3 + 0.9 * haze) * 0.12 * uFill;
+        // last: cap the brightest channel below the bloom threshold (2), hue kept, so nothing in the sky blooms:
+        // HDR star texels (square halos), stars twinkling brighter, and meteor heads and flares
+        col *= min(1.0, 1.6 / max(max(col.r, col.g), max(col.b, 1e-4)));
         gl_FragColor = vec4(col, 0.0);   // alpha 0: the grade keeps the nebula's colour
       }`,
   })
@@ -576,6 +603,46 @@ const skyYaw = (t) => {
 // ---------- Experience flow ----------
 const $ = (id) => document.getElementById(id);
 const body = document.body;
+
+// ---------- Moon-phase complications (bottom corners) ----------
+// Lit part of a moon at phase p (0 new, 0.5 full, 1 new): the limb arc on the lit side plus the terminator, a half
+// ellipse of x-radius r*|cos 2πp| that bulges toward the lit side in a crescent and away from it in a gibbous phase.
+function phasePath(cx, cy, r, p) {
+  p = ((p % 1) + 1) % 1;
+  const k = Math.cos(2 * Math.PI * p), rx = Math.abs(k) * r, wax = p < 0.5;
+  const limb = wax ? 1 : 0, term = wax ? (k > 0 ? 0 : 1) : (k > 0 ? 1 : 0);
+  return `M${cx},${cy - r}A${r},${r} 0 0 ${limb} ${cx},${cy + r}A${rx},${r} 0 0 ${term} ${cx},${cy - r}Z`;
+}
+const PHASE_NAMES = ['New moon', 'Waxing crescent', 'First quarter', 'Waxing gibbous', 'Full moon', 'Waning gibbous', 'Last quarter', 'Waning crescent'];
+const SVGNS = 'http://www.w3.org/2000/svg';
+const strip = $('phaseStrip'), stripMoons = [];
+for (let i = 0; i < 8; i++) {                    // 8 glyphs, each an eighth of a cycle ahead of the last
+  const cx = 10 + i * 23.7;
+  const o = document.createElementNS(SVGNS, 'circle');
+  Object.entries({ cx, cy: 10, r: 6.5, fill: 'none', stroke: 'currentColor', 'stroke-width': .5, opacity: .45 }).forEach(([k, v]) => o.setAttribute(k, v));
+  const m = document.createElementNS(SVGNS, 'path'); m.setAttribute('fill', 'currentColor');
+  strip.append(o, m); stripMoons.push({ m, cx });
+}
+for (let i = 0; i < 60; i++) {                   // dial ring: 60 ticks, every fifth longer
+  const a = i / 60 * Math.PI * 2, r0 = i % 5 ? 31 : 28.5, l = document.createElementNS(SVGNS, 'line');
+  Object.entries({ x1: 40 + Math.sin(a) * r0, y1: 40 - Math.cos(a) * r0, x2: 40 + Math.sin(a) * 33, y2: 40 - Math.cos(a) * 33 })
+    .forEach(([k, v]) => l.setAttribute(k, v.toFixed(2)));
+  $('phaseTicks').append(l);
+}
+let phaseLabel = '';
+function updatePhases(t) {
+  const base = t / 24;                            // one full lunation every 24 s
+  stripMoons.forEach(({ m, cx }, i) => {
+    const p = base + i / 8;
+    m.setAttribute('d', phasePath(cx, 10, 6.5, p));
+    m.setAttribute('opacity', (0.55 + 0.4 * Math.sin(Math.PI * (((p % 1) + 1) % 1))).toFixed(3));   // brighter toward full
+  });
+  const p = ((base % 1) + 1) % 1;
+  $('phaseMoon').setAttribute('d', phasePath(40, 40, 22, p));
+  const lit = Math.round((1 - Math.cos(2 * Math.PI * p)) / 2 * 100);
+  const label = `${PHASE_NAMES[Math.round(p * 8) % 8]} · ${lit}%`;
+  if (label !== phaseLabel) $('phaseName').textContent = phaseLabel = label;   // touch the DOM text only on change
+}
 let enterT = -1, cur = -1, active = 0, lockUntil = 0, drag = null, captionTimer = 0;
 for (const [, name] of WATCHES) {
   const b = document.createElement('button'); b.type = 'button'; b.setAttribute('aria-label', name);
@@ -773,6 +840,7 @@ renderer.setAnimationLoop(() => {
   skyU.uMoonRad.value = Math.asin(Math.min(1, moonR * moon.scale.x / mDist));
   meteorUpdate(t);
   for (const sl of slots) updateSlot(sl, t);
+  if (enterT >= 0) updatePhases(t);
   composer.render(dt);
   // the product on top of everything, untouched by post; rendered even when hidden so it clears
   // the watch sees only 40% of the pointer parallax: its camera sits 40% of the way from the no-pointer pose to the real one
